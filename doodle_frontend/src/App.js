@@ -13,7 +13,14 @@ import BrushIcon from "@mui/icons-material/Brush";
 import RestartAltIcon from "@mui/icons-material/RestartAlt";
 import CheckCircleIcon from "@mui/icons-material/CheckCircle";
 import AccountCircleIcon from "@mui/icons-material/AccountCircle";
+import InfoIcon from "@mui/icons-material/Info";
+import CloseIcon from "@mui/icons-material/Close";
+import IconButton from "@mui/material/IconButton";
+import Fade from "@mui/material/Fade";
+import Backdrop from "@mui/material/Backdrop";
 import './App.css';
+import './funky.css';
+import CATEGORIES from './categories';
 
 const darkTheme = createTheme({
   palette: {
@@ -48,57 +55,170 @@ const CanvasContainer = styled(Paper)(({ theme }) => ({
   border: '1px solid #27273a',
 }));
 
-const CANVAS_SIZE = 640;
-const STROKE_WIDTH = 14;
-const STROKE_COLOR = '#f3f4f6';
+// Responsive canvas size (wide 16:9 aspect ratio, max 96vw x 54vw)
+const getResponsiveCanvasSize = () => {
+  const maxW = Math.min(window.innerWidth * 0.96, 1200);
+  const width = Math.floor(maxW);
+  const height = Math.floor(width * 9 / 16);
+  return { width, height };
+};
+
+const DEFAULT_STROKE_COLOR = '#000000'; // default black stroke for drawing
+
+// Helper function to resize and compress canvas image to 28x28 pixels
+const resizeAndCompressImage = (canvas, quality = 0.8) => {
+  // Create a temporary canvas for resizing
+  const tempCanvas = document.createElement('canvas');
+  const tempCtx = tempCanvas.getContext('2d');
+  
+  // Set target size to 28x28
+  tempCanvas.width = 28;
+  tempCanvas.height = 28;
+  
+  // Fill with white background (important for doodle recognition)
+  tempCtx.fillStyle = '#FFFFFF';
+  tempCtx.fillRect(0, 0, 28, 28);
+  
+  // Draw the original canvas content scaled down to 28x28
+  tempCtx.drawImage(canvas, 0, 0, canvas.width, canvas.height, 0, 0, 28, 28);
+  
+  // Return compressed image data URL
+  return tempCanvas.toDataURL('image/jpeg', quality);
+};
 
 function App() {
+  // --- Confetti state ---
+  const [showConfetti, setShowConfetti] = useState(false);
+  const confettiRef = useRef(null);
+
+  // Free draw state
+  const [feedback, setFeedback] = useState('');
+  const [aiImage, setAiImage] = useState(""); // base64 or URL for AI image
+  const [isErasing, setIsErasing] = useState(false); // new state for eraser
+
+  // Download user drawing as 28x28 compressed image
+  const downloadUserDrawing = () => {
+    const canvas = canvasRef.current;
+    const compressedImage = resizeAndCompressImage(canvas, 0.9);
+    const link = document.createElement('a');
+    link.download = 'your_drawing_28x28.jpg';
+    link.href = compressedImage;
+    link.click();
+  };
+
+  
+  const downloadAIDrawing = () => {
+    if (!aiImage) return;
+    const link = document.createElement('a');
+    link.download = 'ai_drawing.png';
+    link.href = aiImage;
+    link.click();
+  };
+
+  const resetCanvasAndFeedback = () => {
+    setFeedback('');
+    setPrediction("");
+    setGenAiPrediction("");
+    clearCanvas();
+  };
+
+
+  useEffect(() => {
+    resetCanvasAndFeedback();
+    // eslint-disable-next-line
+  }, []);
+
+  //]
+  const handleSubmitDoodle = async () => {
+    setLoading(true);
+    try {
+      const image = resizeAndCompressImage(canvasRef.current, 0.8);
+      await fetch("http://localhost:5000/submit", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ image, username }),
+      });
+      setFeedback('Submitted!');
+      setTimeout(() => resetCanvasAndFeedback(), 1200);
+    } catch (err) {
+      setFeedback('Submission failed. Try again.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const canvasRef = useRef(null);
   const [drawing, setDrawing] = useState(false);
   const [prediction, setPrediction] = useState("");
+  const [genAiPrediction, setGenAiPrediction] = useState("");
+  const [genAiLoading, setGenAiLoading] = useState(false);
   const [loading, setLoading] = useState(false);
   const [username, setUsername] = useState("");
-  const [strokeColor, setStrokeColor] = useState("#f3f4f6");
-  const [strokeWidth, setStrokeWidth] = useState(14);
-  const [history, setHistory] = useState([]);
   const [showInfo, setShowInfo] = useState(false);
+  const [strokeWidth, setStrokeWidth] = useState(4);
+  const [brushColor, setBrushColor] = useState(DEFAULT_STROKE_COLOR);
+  const [canvasSize, setCanvasSize] = useState(getResponsiveCanvasSize());
+
+  useEffect(() => {
+    const handleResize = () => {
+      setCanvasSize(getResponsiveCanvasSize());
+    };
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
+
+
+  useEffect(() => {
+    const handleKeyDown = (event) => {
+      if (event.key === 'Escape' && showInfo) {
+        setShowInfo(false);
+      }
+    };
+    
+    if (showInfo) {
+      document.addEventListener('keydown', handleKeyDown);
+     
+      document.body.style.overflow = 'hidden';
+    } else {
+      document.body.style.overflow = 'unset';
+    }
+    
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown);
+      document.body.style.overflow = 'unset';
+    };
+  }, [showInfo]);
 
   // Drawing logic
   const getPointerPos = (e) => {
-    const rect = canvasRef.current.getBoundingClientRect();
-    if (e.touches) {
-      return {
-        x: e.touches[0].clientX - rect.left,
-        y: e.touches[0].clientY - rect.top,
-      };
-    }
+    const canvas = canvasRef.current;
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+    
     return {
-      x: e.clientX - rect.left,
-      y: e.clientY - rect.top,
+      x: (e.clientX - rect.left) * scaleX,
+      y: (e.clientY - rect.top) * scaleY
     };
   };
 
   const handlePointerDown = (e) => {
     setDrawing(true);
-    // Clear previous prediction when starting to draw
-    setPrediction("");
-    
+    const pos = getPointerPos(e);
     const ctx = canvasRef.current.getContext('2d');
-    const { x, y } = getPointerPos(e);
     ctx.beginPath();
-    ctx.moveTo(x, y);
-    setHistory((prev) => [...prev, ctx.getImageData(0, 0, CANVAS_SIZE, CANVAS_SIZE)]);
+    ctx.moveTo(pos.x, pos.y);
   };
 
   const handlePointerMove = (e) => {
     if (!drawing) return;
+    const pos = getPointerPos(e);
     const ctx = canvasRef.current.getContext('2d');
-    const { x, y } = getPointerPos(e);
-    ctx.lineTo(x, y);
-    ctx.strokeStyle = strokeColor;
     ctx.lineWidth = strokeWidth;
     ctx.lineCap = 'round';
-    ctx.lineJoin = 'round';
+    ctx.strokeStyle = isErasing ? '#ffffff' : brushColor;
+    ctx.globalCompositeOperation = isErasing ? 'destination-out' : 'source-over';
+    ctx.lineTo(pos.x, pos.y);
     ctx.stroke();
   };
 
@@ -107,88 +227,75 @@ function App() {
   };
 
   const clearCanvas = () => {
-    const ctx = canvasRef.current.getContext('2d');
-    ctx.clearRect(0, 0, CANVAS_SIZE, CANVAS_SIZE);
-    ctx.fillStyle = '#fff';
-    ctx.fillRect(0, 0, CANVAS_SIZE, CANVAS_SIZE);
-    setPrediction(""); // Clear prediction when clearing canvas
-    setHistory([]); // Clear history when clearing canvas
+    const canvas = canvasRef.current;
+    const ctx = canvas.getContext('2d');
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
   };
 
-  // Fill canvas with white on mount
   useEffect(() => {
-    clearCanvas();
-    // eslint-disable-next-line
-  }, []);
+    if (canvasRef.current) {
+      clearCanvas();
+    }
+  }, [canvasSize]);
 
   const getImageData = () => {
-    // Downscale to 28x28 and get grayscale values
-    const offscreen = document.createElement('canvas');
-    offscreen.width = 28;
-    offscreen.height = 28;
-    const ctx = offscreen.getContext('2d');
-    ctx.fillStyle = 'white';
-    ctx.fillRect(0, 0, 28, 28);
-    ctx.drawImage(canvasRef.current, 0, 0, 28, 28);
-    const imageData = ctx.getImageData(0, 0, 28, 28);
-    const pixels = [];
-    for (let i = 0; i < imageData.data.length; i += 4) {
-      const r = imageData.data[i];
-      const g = imageData.data[i + 1];
-      const b = imageData.data[i + 2];
-      const grayscale = (r + g + b) / 3;
-      // Invert the grayscale for better model compatibility (black stroke on white background)
-      pixels.push((255 - grayscale) / 255);
+    const canvas = canvasRef.current;
+  
+    // Create a 28x28 resized version for consistent ML input
+    const tempCanvas = document.createElement('canvas');
+    const tempCtx = tempCanvas.getContext('2d');
+    tempCanvas.width = 28;
+    tempCanvas.height = 28;
+  
+    // Fill with white background
+    tempCtx.fillStyle = '#FFFFFF';
+    tempCtx.fillRect(0, 0, 28, 28);
+  
+    // Draw the original canvas scaled to 28x28
+    tempCtx.drawImage(canvas, 0, 0, canvas.width, canvas.height, 0, 0, 28, 28);
+  
+    // Get image data from the resized canvas
+    const imageData = tempCtx.getImageData(0, 0, 28, 28);
+    const data = imageData.data;
+  
+    // Convert to grayscale and create binary array
+    const binaryData = [];
+    for (let i = 0; i < data.length; i += 4) {
+      const avg = (data[i] + data[i + 1] + data[i + 2]) / 3;
+      binaryData.push(avg < 128 ? 1 : 0);
     }
-    return pixels;
-  };
-
-  const undoLast = () => {
-    if (history.length > 0) {
-      const ctx = canvasRef.current.getContext('2d');
-      const newHistory = [...history];
-      const last = newHistory.pop();
-      setHistory(newHistory);
-      ctx.putImageData(last, 0, 0);
-      // Clear prediction when undoing
-      setPrediction("");
-    }
-  };
-
-  const downloadImage = () => {
-    const link = document.createElement('a');
-    link.download = 'doodle.png';
-    link.href = canvasRef.current.toDataURL('image/png');
-    link.click();
+  
+    return binaryData;
   };
 
   const handlePredict = async () => {
     setLoading(true);
-    const image = getImageData();
-    
     try {
-      console.log("Sending prediction request..."); // Debug log
+      const imageData = getImageData();
       const response = await fetch("http://localhost:5000/predict", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ image }),
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ image: imageData }),
       });
-      
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
-      }
-      
-      const data = await response.json();
-      console.log("Received response:", data); // Debug log
-      setPrediction(data.label);
+      const result = await response.json();
+      setPrediction(result.label);
     } catch (err) {
-      setPrediction("Error: Could not connect to backend");
-      console.error("Full error:", err);
+      setPrediction("Error");
     } finally {
       setLoading(false);
     }
+  };
+
+  // handleGenAiPredict function will be implemented when GenAI features are added
+
+
+  const handlePredictAndGenerate = async () => {
+    
+    await handlePredict();
+    // GenAI prediction will be implemented in the future
   };
 
   return (
@@ -196,15 +303,56 @@ function App() {
       <CssBaseline />
       <Box sx={{ minHeight: '100vh', background: 'radial-gradient(ellipse at top right, #232336 60%, #18181b 100%)', p: 0 }}>
         <AppBar position="static" color="primary" sx={{ background: 'linear-gradient(90deg, #232336 40%, #6366f1 100%)', boxShadow: 3 }}>
-           <Button
-            variant="outlined"
-            color="secondary"
-            onClick={() => setShowInfo(true)}
-            sx={{ fontWeight: 600, borderRadius: 8, px: 2, fontSize: 16 }}
-           >
-          ℹ️ Info
-           </Button>
-
+          <Toolbar sx={{ display: 'flex', gap: 2 }}>
+            <BrushIcon sx={{ mr: 1, fontSize: 32 }} />
+            <Typography
+              variant="h4"
+              sx={{
+                flexGrow: 1,
+                fontWeight: 600,
+                letterSpacing: 1.5,
+                fontFamily: 'Inter, Roboto, Helvetica Neue, Arial, sans-serif',
+                color: '#f8fafc',
+                display: 'flex',
+                alignItems: 'center',
+                gap: 2,
+                textShadow: '0 1px 3px rgba(0, 0, 0, 0.3)',
+                userSelect: 'none',
+              }}
+            >
+              <svg width="28" height="28" viewBox="0 0 24 24" fill="none" style={{ marginRight: 8 }}>
+                <path d="M12 2L13.09 8.26L20 9L13.09 9.74L12 16L10.91 9.74L4 9L10.91 8.26L12 2Z" fill="#06b6d4" opacity="0.9" />
+                <path d="M19 15L19.5 17L21.5 17.5L19.5 18L19 20L18.5 18L16.5 17.5L18.5 17L19 15Z" fill="#f472b6" opacity="0.8" />
+                <path d="M5 6L5.5 7.5L7 8L5.5 8.5L5 10L4.5 8.5L3 8L4.5 7.5L5 6Z" fill="#a5b4fc" opacity="0.7" />
+              </svg>
+              Doodle Recognizer
+            </Typography>
+            <Button
+              variant="outlined"
+              color="secondary"
+              onClick={() => setShowInfo(true)}
+              startIcon={<InfoIcon />}
+              sx={{ 
+                fontWeight: 600, 
+                borderRadius: 12, 
+                px: 3, 
+                py: 1, 
+                fontSize: 16, 
+                mr: 2,
+                background: 'rgba(255,255,255,0.1)',
+                backdropFilter: 'blur(10px)',
+                border: '1px solid rgba(255,255,255,0.2)',
+                transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
+                '&:hover': {
+                  background: 'rgba(255,255,255,0.2)',
+                  border: '1px solid rgba(255,255,255,0.4)',
+                  transform: 'translateY(-2px)',
+                  boxShadow: '0 8px 25px rgba(99, 102, 241, 0.3)' 
+                }
+              }}
+            >
+              About
+            </Button>
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, background: '#232336', borderRadius: 2, px: 2, py: 0.5, boxShadow: 2 }}>
               <AccountCircleIcon sx={{ color: '#a5b4fc', fontSize: 28 }} />
               <TextField
@@ -219,158 +367,368 @@ function App() {
                 sx={{ width: 160, ml: 1 }}
               />
             </Box>
-          
+          </Toolbar>
         </AppBar>
-        <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: '80vh', p: 2 }}>
-          <CanvasContainer>
-            <Typography variant="h6" align="center" sx={{ mb: 2, color: '#a5b4fc', fontWeight: 600, letterSpacing: 1 }}>
-              Draw your doodle below!
-            </Typography>
-            <Box sx={{ display: 'flex', justifyContent: 'center' }}>
-              <canvas
-                ref={canvasRef}
-                width={CANVAS_SIZE}
-                height={CANVAS_SIZE}
-                style={{
-                  borderRadius: 20,
-                  border: '2.5px solid #6366f1',
-                  background: '#18181b',
-                  boxShadow: '0 4px 24px 0 rgba(20, 35, 238, 0.73)',
-                  touchAction: 'none',
-                  cursor: 'crosshair',
-                  marginBottom: 12,
-                }}
-                onMouseDown={handlePointerDown}
-                onMouseMove={handlePointerMove}
-                onMouseUp={handlePointerUp}
-                onMouseLeave={handlePointerUp}
-                onTouchStart={handlePointerDown}
-                onTouchMove={handlePointerMove}
-                onTouchEnd={handlePointerUp}
-              />
-              </Box>
-            <Box sx={{ display: 'flex', justifyContent: 'center', flexWrap: 'wrap', gap: 2, mt: 2 }}>
+        <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', width: '100%', p: 3 }}>
+          {/* Control Buttons - Above canvas */}
+          <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', width: '100%', mb: 3 }}>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 2, flexWrap: 'wrap', justifyContent: 'center' }}>
               <Button
-                 variant="contained"
-                 color="primary"
-                 startIcon={<CheckCircleIcon />}
-                 onClick={handlePredict}
-                 disabled={loading}
-                sx={{ fontWeight: 600, borderRadius: 8, px: 3, fontSize: 18, boxShadow: 3 }}
-              >
-              {loading ? <CircularProgress size={24} color="inherit" /> : 'Predict'}
-              </Button>
-              <Button
-                 variant="outlined"
-                color="secondary"
-                startIcon={<RestartAltIcon />}
-                onClick={clearCanvas}
-                sx={{ fontWeight: 600, borderRadius: 8, px: 3, fontSize: 18, borderWidth: 2, boxShadow: 2 }}
-               >
-              Clear
-              </Button>
-              <Button
-                 variant="outlined"
-                 color="secondary"
-                 onClick={undoLast}
-                sx={{ fontWeight: 600, borderRadius: 8, px: 3, fontSize: 18, borderWidth: 2 }}
-             >
-              Undo
-             </Button>
-             <Button
-                  variant="outlined"
-                 color="secondary"
-                  onClick={downloadImage}
-                  sx={{ fontWeight: 600, borderRadius: 8, px: 3, fontSize: 18, borderWidth: 2 }}
-            >
-             Download
-            </Button>
-            </Box>
-            <Box sx={{ display: 'flex', justifyContent: 'center', gap: 3, mt: 3, flexWrap: 'wrap' }}>
-            <TextField
-               label="Brush Color"
-               type="color"
-               value={strokeColor}
-               onChange={(e) => setStrokeColor(e.target.value)}
-               variant="outlined"
-               sx={{ minWidth: 120 }}
-            />
-           <TextField
-               label="Stroke Size"
-                type="number"
-                value={strokeWidth}
-                onChange={(e) => setStrokeWidth(parseInt(e.target.value))}
                 variant="outlined"
-                inputProps={{ min: 1, max: 50 }}
-                sx={{ minWidth: 120 }}
-             />
-            </Box>
-
-            <Paper elevation={2} sx={{ mt: 4, p: 2.5, background: 'rgba(36,41,60,0.92)', borderRadius: 10, border: '1.5px solid #6366f1', boxShadow: 6 }}>
-              <Typography variant="subtitle1" align="center" sx={{ color: '#a5b4fc', fontWeight: 500, letterSpacing: 1 }}>
-                Prediction for <span style={{color:'#06b6d4', fontWeight:600}}>{username || '—'}</span>:
+                color="secondary"
+                onClick={() => setStrokeWidth(Math.max(1, strokeWidth - 2))}
+                sx={{ minWidth: 36, px: 0, fontWeight: 700 }}
+              >-
+              </Button>
+              <Typography sx={{ mx: 1, fontWeight: 700, fontSize: 18, color: '#6366f1' }}>
+                Brush: {strokeWidth}px
               </Typography>
-              <Typography variant="h4" align="center" sx={{ color: prediction ? '#06b6d4' : '#64748b', fontWeight: 700, mt: 1, letterSpacing: 2 }}>
+              <Button
+                variant="outlined"
+                color="secondary"
+                onClick={() => setStrokeWidth(Math.min(100, strokeWidth + 2))}
+                sx={{ minWidth: 36, px: 0, fontWeight: 700 }}
+              >+
+              </Button>
+              <Button
+                variant={isErasing ? "contained" : "outlined"}
+                color={isErasing ? "primary" : "secondary"}
+                onClick={() => setIsErasing(!isErasing)}
+                sx={{ fontWeight: 700 }}
+              >{isErasing ? 'Eraser (On)' : 'Eraser'}
+              </Button>
+              
+              {/*  Color Palette */}
+              <Box sx={{ 
+                display: 'flex', 
+                alignItems: 'center', 
+                gap: 2, 
+                ml: 3,
+                background: 'linear-gradient(135deg, rgba(255,255,255,0.1) 0%, rgba(255,255,255,0.05) 100%)',
+                backdropFilter: 'blur(10px)',
+                borderRadius: 3,
+                padding: '12px 16px',
+                border: '1px solid rgba(255,255,255,0.1)',
+                boxShadow: '0 8px 32px rgba(0,0,0,0.2)'
+              }}>
+                <Typography sx={{ 
+                  fontWeight: 600, 
+                  fontSize: 15, 
+                  color: '#e2e8f0', 
+                  letterSpacing: 0.5,
+                  textShadow: '0 1px 2px rgba(0,0,0,0.3)'
+                }}>Palette</Typography>
+                <Box sx={{ display: 'flex', gap: 1.5 }}>
+                  {[
+                    { color: '#1a1a1a', name: 'Charcoal', shadow: 'rgba(26,26,26,0.4)' },
+                    { color: '#dc2626', name: 'Crimson', shadow: 'rgba(220,38,38,0.4)' },
+                    { color: '#2563eb', name: 'Sapphire', shadow: 'rgba(37,99,235,0.4)' },
+                    { color: '#059669', name: 'Emerald', shadow: 'rgba(5,150,105,0.4)' },
+                    { color: '#d97706', name: 'Amber', shadow: 'rgba(217,119,6,0.4)' },
+                    { color: '#7c3aed', name: 'Violet', shadow: 'rgba(124,58,237,0.4)' },
+                    { color: '#ea580c', name: 'Tangerine', shadow: 'rgba(234,88,12,0.4)' },
+                    { color: '#0891b2', name: 'Teal', shadow: 'rgba(8,145,178,0.4)' }
+                  ].map((colorOption) => (
+                    <Box
+                      key={colorOption.color}
+                      onClick={() => setBrushColor(colorOption.color)}
+                      sx={{
+                        width: 36,
+                        height: 36,
+                        borderRadius: '50%',
+                        background: `linear-gradient(135deg, ${colorOption.color} 0%, ${colorOption.color}dd 100%)`,
+                        border: brushColor === colorOption.color 
+                          ? `3px solid #ffffff` 
+                          : `2px solid rgba(255,255,255,0.2)`,
+                        cursor: 'pointer',
+                        position: 'relative',
+                        transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
+                        boxShadow: brushColor === colorOption.color 
+                          ? `0 0 0 2px ${colorOption.color}44, 0 8px 25px ${colorOption.shadow}` 
+                          : `0 4px 15px ${colorOption.shadow}`,
+                        '&:hover': {
+                          transform: 'translateY(-2px) scale(1.1)',
+                          boxShadow: `0 0 0 2px ${colorOption.color}66, 0 12px 35px ${colorOption.shadow}`,
+                          border: '2px solid rgba(255,255,255,0.4)'
+                        },
+                        '&:active': {
+                          transform: 'translateY(0) scale(1.05)'
+                        },
+                        '&::before': {
+                          content: '""',
+                          position: 'absolute',
+                          top: '50%',
+                          left: '50%',
+                          width: '20px',
+                          height: '20px',
+                          borderRadius: '50%',
+                          background: 'rgba(255,255,255,0.2)',
+                          transform: 'translate(-50%, -50%)',
+                          opacity: brushColor === colorOption.color ? 1 : 0,
+                          transition: 'opacity 0.2s ease'
+                        }
+                      }}
+                      title={colorOption.name}
+                    />
+                  ))}
+                </Box>
+              </Box>
+              <Button
+                variant="outlined"
+                color="primary"
+                onClick={clearCanvas}
+                sx={{ fontWeight: 700 }}
+              >Clear
+              </Button>
+              <Button
+                variant="outlined"
+                color="secondary"
+                onClick={downloadUserDrawing}
+                sx={{ fontWeight: 700 }}
+              >Download Drawing
+              </Button>
+              <Button
+                variant="outlined"
+                color="secondary"
+                onClick={downloadAIDrawing}
+                disabled={!aiImage}
+                sx={{ fontWeight: 700 }}
+              >Download AI Image
+              </Button>
+            </Box>
+          </Box>
+          
+          <canvas
+            ref={canvasRef}
+            width={canvasSize.width}
+            height={canvasSize.height}
+            style={{
+              border: '2.5px solid #6366f1',
+              borderRadius: 18,
+              background: '#fff',
+              boxShadow: '0 4px 18px 0 rgba(31, 38, 135, 0.08)',
+              touchAction: 'none',
+              maxWidth: '98vw',
+              maxHeight: '60vw',
+              cursor: 'crosshair',
+              marginBottom: 18
+            }}
+            onPointerDown={handlePointerDown}
+            onPointerMove={handlePointerMove}
+            onPointerUp={handlePointerUp}
+            onPointerLeave={handlePointerUp}
+          />
+          
+          <Box sx={{ display: 'flex', flexDirection: { xs: 'column', md: 'row' }, gap: 3, mt: 2, mb: 2, width: '100%', justifyContent: 'center', alignItems: 'stretch' }}>
+            <Paper elevation={3} sx={{ flex: 1, p: 2.5, background: 'rgba(36,41,60,0.97)', borderRadius: 10, border: '2px solid #f472b6', minWidth: 240, maxWidth: 420, textAlign: 'center', mb: { xs: 2, md: 0 } }}>
+              <Typography variant="subtitle1" sx={{ color: '#f472b6', fontWeight: 600, letterSpacing: 1, mb: 1 }}>
+                Model Prediction
+              </Typography>
+              <Typography variant="h5" sx={{ color: prediction ? '#f472b6' : '#64748b', fontWeight: 700, letterSpacing: 2 }}>
                 {prediction || '—'}
               </Typography>
             </Paper>
-          </CanvasContainer>
-         
+            <Paper elevation={3} sx={{ flex: 1, p: 2.5, background: 'rgba(36,41,60,0.97)', borderRadius: 10, border: '2px solid #06b6d4', minWidth: 240, maxWidth: 480, textAlign: 'center' }}>
+              <Typography variant="subtitle1" sx={{ color: '#a5b4fc', fontWeight: 600, letterSpacing: 1, mb: 1 }}>
+                AI Prediction
+              </Typography>
+              <Typography variant="h5" sx={{ color: genAiPrediction ? '#06b6d4' : '#64748b', fontWeight: 700, letterSpacing: 2 }}>
+                {genAiPrediction || '—'}
+              </Typography>
+              {aiImage && (
+                <Box sx={{ mt: 2, display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+                  <img src={aiImage} alt="AI Drawing" style={{ maxWidth: 180, borderRadius: 8, border: '1px solid #6366f1', background: '#fff', boxShadow: '0 2px 8px #23233644' }} />
+                  <Typography variant="caption" sx={{ color: '#a5b4fc', mt: 1 }}>
+                    AI generated drawing
+                  </Typography>
+                </Box>
+              )}
+            </Paper>
+          </Box>
+          
+          {}
+          <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', width: '100%', mt: 4 }}>
+            <Box sx={{ display: 'flex', gap: 2, alignItems: 'center', mt: 3, flexWrap: 'wrap', justifyContent: 'center' }}>
+              <Button
+                variant="contained"
+                color="primary"
+                onClick={handlePredictAndGenerate}
+                disabled={loading}
+                sx={{ fontWeight: 700, px: 4, py: 1.5, fontSize: 16 }}
+              >{loading ? <CircularProgress size={20} sx={{ color: '#fff' }} /> : 'Predict Doodle'}
+              </Button>
+            </Box>
+            {feedback && (
+              <Typography variant="h6" sx={{ mt: 2, color: '#06b6d4', fontWeight: 600 }}>
+                {feedback}
+              </Typography>
+            )}
+          </Box>
         </Box>
       </Box>
-      {showInfo && (
-  <div style={{
-    position: 'fixed',
-    top: 0,
-    left: 0,
-    zIndex: 9999,
-    width: '100%',
-    height: '100%',
-    backgroundColor: 'rgba(192, 190, 190, 0.7)',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center'
-  }}>
-    <div style={{
-      backgroundColor: '#e0e0ecff',
-      color: '#262d3bff',
-      padding: '24px',
-      borderRadius: '12px',
-      width: '90%',
-      maxWidth: '400px',
-      position: 'relative',
-      boxShadow: '0 4px 20px rgba(0,0,0,0.5)'
-    }}>
-      <button
+      <Backdrop
+        open={showInfo}
         onClick={() => setShowInfo(false)}
-        style={{
-          position: 'absolute',
-          top: '12px',
-          right: '12px',
-          fontSize: '24px',
-          background: 'none',
-          border: 'none',
-          color: '#6b7280ff',
-          cursor: 'pointer'
+        sx={{ 
+          zIndex: 9999,
+          backgroundColor: 'rgba(0, 0, 0, 0.8)',
+          backdropFilter: 'blur(8px)'
         }}
       >
-        ×
-      </button>
-      <h2>About the Doodle Recognition App</h2>
-      <p> Doodle Recognition App allows users to draw simple sketches on a digital canvas and uses machine learning to recognize what the drawing represents. It provides real-time predictions based on the input doodle using a model trained on the Quick, Draw! dataset by Google.</p>
-<p>
-🔹 Features:</p>
-<p>Freehand drawing canvas </p>
-<p>
-Real-time doodle prediction</p>
-<p>
-Top match suggestions with confidence levels</p>
-<p>
-Clean and interactive UI</p>
-    </div>
-  </div>
-)}
-
+        <Fade in={showInfo} timeout={300}>
+          <Box
+            onClick={(e) => e.stopPropagation()}
+            sx={{
+              background: 'linear-gradient(135deg, #232336 0%, #1e1e2e 100%)',
+              color: '#f3f4f6',
+              p: 4,
+              borderRadius: 4,
+              width: { xs: '90%', sm: '80%', md: '600px' },
+              maxWidth: '90vw',
+              maxHeight: '80vh',
+              overflow: 'auto',
+              position: 'relative',
+              boxShadow: '0 20px 60px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(99, 102, 241, 0.3)',
+              border: '1px solid rgba(99, 102, 241, 0.2)',
+              '&::-webkit-scrollbar': {
+                width: '8px'
+              },
+              '&::-webkit-scrollbar-track': {
+                background: 'rgba(255,255,255,0.1)',
+                borderRadius: '4px'
+              },
+              '&::-webkit-scrollbar-thumb': {
+                background: 'rgba(99, 102, 241, 0.6)',
+                borderRadius: '4px',
+                '&:hover': {
+                  background: 'rgba(99, 102, 241, 0.8)'
+                }
+              }
+            }}
+          >
+            <IconButton
+              onClick={() => setShowInfo(false)}
+              sx={{
+                position: 'absolute',
+                top: 16,
+                right: 16,
+                color: '#a5b4fc',
+                background: 'rgba(255,255,255,0.1)',
+                '&:hover': {
+                  background: 'rgba(255,255,255,0.2)',
+                  transform: 'scale(1.1)'
+                },
+                transition: 'all 0.2s ease'
+              }}
+            >
+              <CloseIcon />
+            </IconButton>
+            
+            <Box sx={{ display: 'flex', alignItems: 'center', mb: 3 }}>
+              <InfoIcon sx={{ color: '#6366f1', fontSize: 32, mr: 2 }} />
+              <Typography 
+                variant="h4" 
+                sx={{ 
+                  color: '#6366f1', 
+                  fontFamily: 'Inter, sans-serif',
+                  fontWeight: 700,
+                  background: 'linear-gradient(135deg, #6366f1 0%, #a5b4fc 100%)',
+                  backgroundClip: 'text',
+                  WebkitBackgroundClip: 'text',
+                  WebkitTextFillColor: 'transparent'
+                }}
+              >
+                About Doodle Recognizer
+              </Typography>
+            </Box>
+            
+            <Typography 
+              variant="body1" 
+              sx={{ 
+                lineHeight: 1.7, 
+                mb: 3, 
+                fontSize: '1.1rem',
+                color: '#e2e8f0'
+              }}
+            >
+              This advanced doodle recognition app uses machine learning to identify your drawings and generate AI-powered artwork based on your sketches.
+            </Typography>
+            
+            <Box sx={{ mb: 3 }}>
+              <Typography 
+                variant="h6" 
+                sx={{ 
+                  color: '#f472b6', 
+                  mb: 2, 
+                  fontWeight: 600,
+                  display: 'flex',
+                  alignItems: 'center'
+                }}
+              >
+                ✨ Features
+              </Typography>
+              
+              <Box component="ul" sx={{ pl: 0, listStyle: 'none' }}>
+                {[
+                  { icon: '🧠', text: 'Real-time drawing recognition using neural networks' },
+                  { icon: '🎨', text: 'AI-powered image generation based on your doodles' },
+                  { icon: '🖌', text: 'Customizable brush size and colors' },
+                  { icon: '💾', text: 'Download your drawings and AI-generated images' },
+                  { icon: '📱', text: 'Responsive canvas that adapts to your screen' }
+                ].map((feature, index) => (
+                  <Box 
+                    key={index}
+                    component="li" 
+                    sx={{ 
+                      display: 'flex', 
+                      alignItems: 'center', 
+                      mb: 1.5,
+                      p: 2,
+                      borderRadius: 2,
+                      background: 'rgba(255,255,255,0.05)',
+                      border: '1px solid rgba(255,255,255,0.1)',
+                      transition: 'all 0.2s ease',
+                      '&:hover': {
+                        background: 'rgba(255,255,255,0.1)',
+                        transform: 'translateX(8px)'
+                      }
+                    }}
+                  >
+                    <Typography sx={{ fontSize: '1.5rem', mr: 2 }}>
+                      {feature.icon}
+                    </Typography>
+                    <Typography sx={{ color: '#cbd5e1', lineHeight: 1.6 }}>
+                      {feature.text}
+                    </Typography>
+                  </Box>
+                ))}
+              </Box>
+            </Box>
+            
+            <Box 
+              sx={{ 
+                mt: 4, 
+                p: 3, 
+                borderRadius: 3,
+                background: 'linear-gradient(135deg, rgba(99, 102, 241, 0.1) 0%, rgba(244, 114, 182, 0.1) 100%)',
+                border: '1px solid rgba(99, 102, 241, 0.2)',
+                textAlign: 'center'
+              }}
+            >
+              <Typography 
+                variant="body2" 
+                sx={{ 
+                  color: '#a5b4fc', 
+                  fontSize: '1rem',
+                  fontWeight: 500,
+                  lineHeight: 1.6
+                }}
+              > <strong>"Predict & Generate AI"</strong> to see the magic happen!
+              </Typography>
+            </Box>
+          </Box>
+        </Fade>
+      </Backdrop>
     </ThemeProvider>
   );
 }
