@@ -10,8 +10,6 @@ import { styled, createTheme, ThemeProvider } from "@mui/material/styles";
 import CssBaseline from "@mui/material/CssBaseline";
 import TextField from "@mui/material/TextField";
 import BrushIcon from "@mui/icons-material/Brush";
-import RestartAltIcon from "@mui/icons-material/RestartAlt";
-import CheckCircleIcon from "@mui/icons-material/CheckCircle";
 import AccountCircleIcon from "@mui/icons-material/AccountCircle";
 import InfoIcon from "@mui/icons-material/Info";
 import CloseIcon from "@mui/icons-material/Close";
@@ -20,7 +18,10 @@ import Fade from "@mui/material/Fade";
 import Backdrop from "@mui/material/Backdrop";
 import './App.css';
 import './funky.css';
-import CATEGORIES from './categories';
+// import CATEGORIES from './categories';
+
+// Centralized backend URL to avoid port mismatches
+const BACKEND_URL = process.env.REACT_APP_BACKEND_URL || 'http://localhost:5001';
 
 const darkTheme = createTheme({
   palette: {
@@ -45,15 +46,15 @@ const darkTheme = createTheme({
   },
 });
 
-const CanvasContainer = styled(Paper)(({ theme }) => ({
-  margin: 'auto',
-  padding: theme.spacing(3),
-  maxWidth: 600,
-  background: theme.palette.background.paper,
-  boxShadow: '0 8px 32px 0 rgba(31, 38, 135, 0.37)',
-  borderRadius: 28,
-  border: '1px solid #27273a',
-}));
+// const CanvasContainer = styled(Paper)(({ theme }) => ({
+//   margin: 'auto',
+//   padding: theme.spacing(3),
+//   maxWidth: 600,
+//   background: theme.palette.background.paper,
+//   boxShadow: '0 8px 32px 0 rgba(31, 38, 135, 0.37)',
+//   borderRadius: 28,
+//   border: '1px solid #27273a',
+// }));
 
 // Responsive canvas size (wide 16:9 aspect ratio, max 96vw x 54vw)
 const getResponsiveCanvasSize = () => {
@@ -96,13 +97,77 @@ function App() {
   const [aiImage, setAiImage] = useState(""); // base64 or URL for AI image
   const [isErasing, setIsErasing] = useState(false); // new state for eraser
 
-  // Download user drawing as 28x28 compressed image
+  // Get raw pixel data in original canvas size
+  const getRawPixelData = () => {
+    const canvas = canvasRef.current;
+    const width = canvas.width;
+    const height = canvas.height;
+    
+    // Create a temporary canvas to process the image
+    const tempCanvas = document.createElement('canvas');
+    tempCanvas.width = width;
+    tempCanvas.height = height;
+    const tempCtx = tempCanvas.getContext('2d');
+    
+    // Fill with white background
+    tempCtx.fillStyle = '#FFFFFF';
+    tempCtx.fillRect(0, 0, width, height);
+    
+    // Draw the original content
+    tempCtx.drawImage(canvas, 0, 0);
+    
+    // Get image data
+    const imageData = tempCtx.getImageData(0, 0, width, height);
+    const pixels = imageData.data;
+    
+    // Convert to grayscale and normalize to 0-1
+    const pixelData = [];
+    for (let i = 0; i < pixels.length; i += 4) {
+      // Calculate grayscale (invert colors so drawing is black on white)
+      const gray = 255 - (pixels[i] + pixels[i + 1] + pixels[i + 2]) / 3;
+      pixelData.push(gray / 255.0); // Normalize to 0-1
+    }
+    
+    return { 
+      pixelArray: pixelData, 
+      width: width, 
+      height: height,
+      originalWidth: canvas.width,
+      originalHeight: canvas.height
+    };
+  };
+
+  // Download user drawing in original size as PNG
   const downloadUserDrawing = () => {
     const canvas = canvasRef.current;
-    const compressedImage = resizeAndCompressImage(canvas, 0.9);
+    
+    // Create a temporary canvas with the same size as the original
+    const tempCanvas = document.createElement('canvas');
+    tempCanvas.width = canvas.width;
+    tempCanvas.height = canvas.height;
+    const tempCtx = tempCanvas.getContext('2d');
+    
+    // Fill with white background
+    tempCtx.fillStyle = '#FFFFFF';
+    tempCtx.fillRect(0, 0, canvas.width, canvas.height);
+    
+    // Draw the original content
+    tempCtx.drawImage(canvas, 0, 0);
+    
+    // Convert to PNG with no compression
+    const pngData = tempCanvas.toDataURL('image/png');
+    
+    // Get current date and time for filename
+    const now = new Date();
+    const timestamp = now.toISOString()
+      .replace(/[:.]/g, '-')
+      .replace('T', '_')
+      .split('+')[0];
+    
+    // Download the image
     const link = document.createElement('a');
-    link.download = 'your_drawing_28x28.jpg';
-    link.href = compressedImage;
+    link.download = `doodle_${timestamp}.png`;
+    link.href = pngData;
     link.click();
   };
 
@@ -115,9 +180,47 @@ function App() {
     link.click();
   };
 
+  const downloadProcessedImage = async () => {
+    try {
+      const imageData = getImageData();
+
+      // Prevent blank downloads if nothing is drawn
+      const hasDrawing = imageData.image.some((pixel) => pixel > 0.1);
+      if (!hasDrawing) {
+        setFeedback('Please draw something first');
+        setTimeout(() => setFeedback(''), 1500);
+        return;
+      }
+
+      const response = await fetch(`${BACKEND_URL}/download_processed`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(imageData)
+      });
+      if (!response.ok) throw new Error('Failed to fetch processed image');
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = 'processed.png';
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+      setFeedback('Processed image downloaded');
+      setTimeout(() => setFeedback(''), 1500);
+    } catch (err) {
+      console.error('Processed image download failed:', err);
+      setFeedback('Processed image download failed');
+      setTimeout(() => setFeedback(''), 2000);
+    }
+  };
+
   const resetCanvasAndFeedback = () => {
     setFeedback('');
     setPrediction("");
+    setPredictionConfidence(0);
+    setTopPredictions([]);
     setGenAiPrediction("");
     clearCanvas();
   };
@@ -128,28 +231,13 @@ function App() {
     // eslint-disable-next-line
   }, []);
 
-  //]
-  const handleSubmitDoodle = async () => {
-    setLoading(true);
-    try {
-      const image = resizeAndCompressImage(canvasRef.current, 0.8);
-      await fetch("http://localhost:5000/submit", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ image, username }),
-      });
-      setFeedback('Submitted!');
-      setTimeout(() => resetCanvasAndFeedback(), 1200);
-    } catch (err) {
-      setFeedback('Submission failed. Try again.');
-    } finally {
-      setLoading(false);
-    }
-  };
+  // Removed unused legacy submit function that pointed to port 5000 to prevent confusion
 
   const canvasRef = useRef(null);
   const [drawing, setDrawing] = useState(false);
   const [prediction, setPrediction] = useState("");
+  const [predictionConfidence, setPredictionConfidence] = useState(0);
+  const [topPredictions, setTopPredictions] = useState([]);
   const [genAiPrediction, setGenAiPrediction] = useState("");
   const [genAiLoading, setGenAiLoading] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -261,41 +349,178 @@ function App() {
     const imageData = tempCtx.getImageData(0, 0, 28, 28);
     const data = imageData.data;
   
-    // Convert to grayscale and create binary array
-    const binaryData = [];
+    // Convert to grayscale and normalize to 0-1 range
+    // For doodle recognition models, typically:
+    // - 0 = background (white/empty)
+    // - 1 = drawing (black/drawn pixels)
+    const normalizedData = [];
     for (let i = 0; i < data.length; i += 4) {
-      const avg = (data[i] + data[i + 1] + data[i + 2]) / 3;
-      binaryData.push(avg < 128 ? 1 : 0);
+      const r = data[i];
+      const g = data[i + 1];
+      const b = data[i + 2];
+      
+      // Calculate grayscale value (0-255)
+      const gray = (r + g + b) / 3;
+      
+      // Invert and normalize: 
+      // - White pixels (255) become 0 (background)
+      // - Black pixels (0) become 1 (drawing)
+      // - Gray pixels are scaled accordingly
+      const normalized = (255 - gray) / 255;
+      normalizedData.push(normalized);
     }
   
-    return binaryData;
+    return {
+      image: normalizedData,
+      width: 28,
+      height: 28
+    };
+  };
+
+  const getAIInterpretation = async (imageData, prediction, confidence) => {
+    try {
+      setGenAiLoading(true);
+      // Get the canvas as base64 image
+      const canvas = canvasRef.current;
+      const imageBase64 = canvas.toDataURL('image/jpeg', 0.8);
+      
+      const response = await fetch(`${BACKEND_URL}/interpret`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          image: imageBase64,
+          prediction: prediction,
+          confidence: confidence
+        }),
+      });
+      
+      const result = await response.json();
+      if (result.error) {
+        throw new Error(result.error);
+      }
+      
+      return result.interpretation;
+    } catch (err) {
+      console.error("AI interpretation error:", err);
+      return "I'm having trouble analyzing this drawing right now. Please try again later.";
+    } finally {
+      setGenAiLoading(false);
+    }
   };
 
   const handlePredict = async () => {
     setLoading(true);
     try {
       const imageData = getImageData();
-      const response = await fetch("http://localhost:5000/predict", {
+      
+      // Check if there's any drawing on the canvas
+      const hasDrawing = imageData.image.some(pixel => pixel > 0.1);
+      if (!hasDrawing) {
+        setPrediction("No Drawing");
+        setPredictionConfidence(0);
+        setTopPredictions([]);
+        setGenAiPrediction("Please draw something on the canvas first.");
+        setLoading(false);
+        return;
+      }
+      
+      const response = await fetch(`${BACKEND_URL}/predict`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ image: imageData }),
+        body: JSON.stringify(imageData),
       });
+      if (!response.ok) {
+        let errMsg = 'Prediction failed';
+        try {
+          const err = await response.json();
+          if (err && (err.detail || err.message)) {
+            errMsg = err.detail || err.message;
+          }
+        } catch {}
+        setPrediction("Error");
+        setPredictionConfidence(0);
+        setTopPredictions([]);
+        setGenAiPrediction(errMsg);
+        return;
+      }
       const result = await response.json();
+      
+      if (result.error) {
+        setPrediction("Error");
+        setPredictionConfidence(0);
+        setTopPredictions([]);
+        setGenAiPrediction(result.error || "Something went wrong. Please try again.");
+        return;
+      }
+      
       setPrediction(result.label);
+      setPredictionConfidence(result.confidence);
+      
+      // Process top predictions if available
+      let predictions = [];
+      if (result.top_predictions && result.top_predictions.length > 0) {
+        predictions = result.top_predictions;
+      } else {
+        predictions = [{class: result.label, confidence: result.confidence}];
+      }
+      setTopPredictions(predictions);
+      
+      // Get AI interpretation if confidence is low or if it's the top prediction
+      if (result.confidence < 0.7) {
+        setGenAiPrediction("Analyzing your drawing...");
+        const interpretation = await getAIInterpretation(
+          imageData.image, // Send just the image array for AI interpretation
+          result.label,
+          result.confidence
+        );
+        setGenAiPrediction(interpretation);
+      } else {
+        setGenAiPrediction(`I'm quite confident this is a ${result.label}!`);
+      }
+      
     } catch (err) {
+      console.error("Prediction error:", err);
       setPrediction("Error");
+      setPredictionConfidence(0);
+      setTopPredictions([]);
+      setGenAiPrediction("Network error. Please check if the backend is running.");
     } finally {
       setLoading(false);
     }
   };
 
-  // handleGenAiPredict function will be implemented when GenAI features are added
+  const handleGenAiPredict = async () => {
+    try {
+      setGenAiLoading(true);
+      const canvas = canvasRef.current;
+      // Use JPEG for smaller payload; backend accepts any common mime
+      const dataUrl = canvas.toDataURL('image/jpeg', 0.9);
+
+      const resp = await fetch(`${BACKEND_URL}/genai_guess`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ image: dataUrl })
+      });
+      if (!resp.ok) {
+        const err = await resp.json().catch(() => ({}));
+        const detail = err && (err.detail || err.message);
+        throw new Error(detail || `GenAI request failed (${resp.status})`);
+      }
+      const json = await resp.json();
+      setGenAiPrediction(json.guess || 'Unknown');
+    } catch (e) {
+      console.error(e);
+      // Surface the specific error for easier debugging
+      setGenAiPrediction(`GenAI is unavailable: ${e.message || e}`);
+    } finally {
+      setGenAiLoading(false);
+    }
+  };
 
 
   const handlePredictAndGenerate = async () => {
-    
     await handlePredict();
-    // GenAI prediction will be implemented in the future
+    await handleGenAiPredict();
   };
 
   return (
@@ -438,8 +663,8 @@ function App() {
                         borderRadius: '50%',
                         background: `linear-gradient(135deg, ${colorOption.color} 0%, ${colorOption.color}dd 100%)`,
                         border: brushColor === colorOption.color 
-                          ? `3px solid #ffffff` 
-                          : `2px solid rgba(255,255,255,0.2)`,
+                          ? '3px solid #ffffff' 
+                          : '2px solid rgba(255,255,255,0.2)',
                         cursor: 'pointer',
                         position: 'relative',
                         transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
@@ -495,6 +720,13 @@ function App() {
                 sx={{ fontWeight: 700 }}
               >Download AI Image
               </Button>
+              <Button
+                variant="outlined"
+                color="secondary"
+                onClick={downloadProcessedImage}
+                sx={{ fontWeight: 700 }}
+              >Download Processed
+              </Button>
             </Box>
           </Box>
           
@@ -522,19 +754,91 @@ function App() {
           <Box sx={{ display: 'flex', flexDirection: { xs: 'column', md: 'row' }, gap: 3, mt: 2, mb: 2, width: '100%', justifyContent: 'center', alignItems: 'stretch' }}>
             <Paper elevation={3} sx={{ flex: 1, p: 2.5, background: 'rgba(36,41,60,0.97)', borderRadius: 10, border: '2px solid #f472b6', minWidth: 240, maxWidth: 420, textAlign: 'center', mb: { xs: 2, md: 0 } }}>
               <Typography variant="subtitle1" sx={{ color: '#f472b6', fontWeight: 600, letterSpacing: 1, mb: 1 }}>
-                Model Prediction
+              Model Prediction {prediction && `${(predictionConfidence * 100).toFixed(1)}% confidence`}
+
               </Typography>
-              <Typography variant="h5" sx={{ color: prediction ? '#f472b6' : '#64748b', fontWeight: 700, letterSpacing: 2 }}>
-                {prediction || '—'}
+              <Typography variant="h5" sx={{ color: prediction ? '#f472b6' : '#64748b', fontWeight: 700, letterSpacing: 2, mb: 1 }}>
+                {prediction ? prediction.charAt(0).toUpperCase() + prediction.slice(1) : '—'}
               </Typography>
+              
+              {topPredictions.length > 0 && (
+                <Box sx={{ mt: 2, textAlign: 'left' }}>
+                  <Typography variant="caption" sx={{ color: '#a5b4fc', display: 'block', mb: 1 }}>
+                    Top predictions:
+                  </Typography>
+                  {topPredictions.map((item, index) => (
+                    <Box key={index} sx={{ 
+                      display: 'flex', 
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                      mb: 0.5,
+                      background: index === 0 ? 'rgba(244, 114, 182, 0.1)' : 'transparent',
+                      p: 0.5,
+                      borderRadius: 1
+                    }}>
+                      <Typography variant="body2" sx={{ color: '#e2e8f0' }}>
+                        {item.class.charAt(0).toUpperCase() + item.class.slice(1)}
+                      </Typography>
+                      <Box sx={{ 
+                        width: '60px',
+                        height: '8px',
+                        background: 'rgba(255,255,255,0.1)',
+                        borderRadius: '4px',
+                        overflow: 'hidden',
+                        ml: 1
+                      }}>
+                        <Box 
+                          sx={{
+                            height: '100%',
+                            width: `${(item.confidence * 100).toFixed(0)}%`,
+                            background: 'linear-gradient(90deg, #f472b6, #ec4899)',
+                            borderRadius: '4px',
+                            transition: 'width 0.5s ease-out'
+                          }}
+                        />
+                      </Box>
+                      <Typography variant="caption" sx={{ color: '#a5b4fc', ml: 1, minWidth: '40px', textAlign: 'right' }}>
+                        {(item.confidence * 100).toFixed(1)}%
+                      </Typography>
+                    </Box>
+                  ))}
+                </Box>
+              )}
             </Paper>
-            <Paper elevation={3} sx={{ flex: 1, p: 2.5, background: 'rgba(36,41,60,0.97)', borderRadius: 10, border: '2px solid #06b6d4', minWidth: 240, maxWidth: 480, textAlign: 'center' }}>
-              <Typography variant="subtitle1" sx={{ color: '#a5b4fc', fontWeight: 600, letterSpacing: 1, mb: 1 }}>
-                AI Prediction
+            <Paper elevation={3} sx={{ flex: 1, p: 2.5, background: 'rgba(36,41,60,0.97)', borderRadius: 10, border: '2px solid #06b6d4', minWidth: 240, maxWidth: 480, display: 'flex', flexDirection: 'column' }}>
+              <Typography variant="subtitle1" sx={{ color: '#a5b4fc', fontWeight: 600, letterSpacing: 1, mb: 1, textAlign: 'center' }}>
+                AI Analysis
               </Typography>
-              <Typography variant="h5" sx={{ color: genAiPrediction ? '#06b6d4' : '#64748b', fontWeight: 700, letterSpacing: 2 }}>
-                {genAiPrediction || '—'}
-              </Typography>
+              
+              {genAiLoading ? (
+                <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', flex: 1, py: 2 }}>
+                  <CircularProgress size={24} sx={{ color: '#06b6d4', mb: 1 }} />
+                  <Typography variant="body2" sx={{ color: '#a5b4fc', textAlign: 'center' }}>
+                    Analyzing your drawing...
+                  </Typography>
+                </Box>
+              ) : (
+                <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: '120px' }}>
+                  <Typography 
+                    variant="body1" 
+                    sx={{ 
+                      color: '#e2e8f0', 
+                      p: 2,
+                      background: 'rgba(6, 182, 212, 0.1)',
+                      borderRadius: 2,
+                      borderLeft: '3px solid #06b6d4',
+                      flex: 1,
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      textAlign: 'center'
+                    }}
+                  >
+                    {genAiPrediction || 'Draw something and click "Predict Doodle" to see AI analysis.'}
+                  </Typography>
+                </Box>
+              )}
+              
               {aiImage && (
                 <Box sx={{ mt: 2, display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
                   <img src={aiImage} alt="AI Drawing" style={{ maxWidth: 180, borderRadius: 8, border: '1px solid #6366f1', background: '#fff', boxShadow: '0 2px 8px #23233644' }} />
@@ -546,7 +850,7 @@ function App() {
             </Paper>
           </Box>
           
-          {}
+          
           <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', width: '100%', mt: 4 }}>
             <Box sx={{ display: 'flex', gap: 2, alignItems: 'center', mt: 3, flexWrap: 'wrap', justifyContent: 'center' }}>
               <Button
