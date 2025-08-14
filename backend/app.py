@@ -40,10 +40,16 @@ app = FastAPI(
     version="1.0.0",
 )
 
-# CORS (adjust allow_origins for production)
+# CORS configuration
+# Default to allowing local development origins, can be overridden with ALLOWED_ORIGINS environment variable
+origins = os.getenv(
+    "ALLOWED_ORIGINS", 
+    "http://localhost:3000,http://127.0.0.1:3000"
+).split(",")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -52,7 +58,13 @@ app.add_middleware(
 
 # Load model once at startup (if TensorFlow is available)
 _here = os.path.dirname(os.path.abspath(__file__))
-_model_path = os.path.join(_here, 'doodle_recognizer_simple.keras')
+_model_path = os.path.join(_here, 'doodle_recognizer_10classes_96x96.keras')
+
+# Check if model file exists
+if not os.path.exists(_model_path):
+    print(f"Error: Model file not found at {_model_path}")
+    print("Please ensure the model file is in the backend directory.")
+    model = None
 model = None
 if tf is not None:
     try:
@@ -65,7 +77,7 @@ else:
     print("TensorFlow not installed; prediction endpoints will be unavailable.")
 
 # Class labels must match training
-class_names = ['apple', 'airplane', 'cat', 'car', 'dog', 'flower', 'star', 'tree', 'umbrella', 'fish']
+class_names = ['banana', 'apple', 'tree', 'car', 'smiley face', 'snake', 'ice cream', 'eye', 'star', 'envelope']
 
 
 # Schemas
@@ -411,32 +423,84 @@ async def genai_guess(req: GenAIGuessRequest):
             ),
         )
     try:
+        print("\n=== GenAI Request ===")
+        print(f"Received request with prompt: {req.prompt}")
+        
+        # Parse and validate the image
         mime, image_bytes = _parse_data_url(req.image)
+        print(f"Image MIME type: {mime}")
+        print(f"Image size: {len(image_bytes)} bytes")
+        
         # Convert to PIL Image for Gemini
         pil_img = Image.open(BytesIO(image_bytes)).convert("RGB")
-
+        print(f"Image dimensions: {pil_img.size}")
+        
+        # Create the prompt
         allowed = ", ".join(class_names)
         default_prompt = (
             "You are a doodle recognizer. The image is a simple sketch on a white background. "
             "Choose the best matching label ONLY from this list: "
             f"{allowed}. "
             "Respond with exactly one label from the list (lowercase, no punctuation, no extra words)."
+            " If you're not sure, make your best guess from the list."
         )
         prompt = (req.prompt or default_prompt).strip()
+        print(f"Using prompt: {prompt}")
+        
+        # Generate content with error handling
+        try:
+            result = gemini_model.generate_content([prompt, pil_img])
+            print(f"Gemini API response: {result}")
+            
+            # Extract text with more detailed debugging
+            text = _extract_text_from_genai_result(result)
+            print(f"Extracted text: {text}")
+            
+            if not text or text.lower() == 'unknown':
+                print("No valid text extracted from response, checking raw response parts...")
+                if hasattr(result, 'parts'):
+                    print(f"Response parts: {result.parts}")
+                if hasattr(result, 'candidates'):
+                    print(f"Response candidates: {result.candidates}")
+                
+                # Try a simpler prompt as fallback
+                print("Trying with a simpler prompt...")
+                simple_prompt = "What is this a simple drawing of? Choose one word from: " + ", ".join(class_names)
+                result = gemini_model.generate_content([simple_prompt, pil_img])
+                text = _extract_text_from_genai_result(result)
+                print(f"Simpler prompt response: {text}")
+            
+            if not text:
+                text = "unknown"
+                print("No text could be extracted, using 'unknown'")
 
-        result = gemini_model.generate_content([prompt, pil_img])
-        text = _extract_text_from_genai_result(result)
-        if not text:
-            text = "unknown"
-
-        # Normalize and enforce to allowed classes
-        normalized = text.lower().strip()
-        if normalized not in class_names:
-            # Try closest match among allowed classes
-            match = difflib.get_close_matches(normalized, class_names, n=1, cutoff=0.5)
-            normalized = match[0] if match else "unknown"
-
-        return GenAIGuessResponse(guess=normalized)
+            # Normalize and enforce to allowed classes
+            normalized = text.lower().strip()
+            print(f"Normalized response: {normalized}")
+            
+            # Clean up the response to match one of our classes
+            normalized = ''.join(c for c in normalized if c.isalpha() or c.isspace())
+            normalized = normalized.strip()
+            
+            print(f"Cleaned response: {normalized}")
+            print(f"Available classes: {class_names}")
+            
+            if normalized not in class_names:
+                print("Response not in class names, trying to find closest match...")
+                # Try closest match among allowed classes with a lower threshold
+                match = difflib.get_close_matches(normalized, class_names, n=1, cutoff=0.3)
+                print(f"Closest matches: {match}")
+                normalized = match[0] if match else "unknown"
+            
+            print(f"Final guess: {normalized}")
+            return GenAIGuessResponse(guess=normalized)
+            
+        except Exception as genai_error:
+            print(f"Error in Gemini API call: {str(genai_error)}")
+            print(f"Error type: {type(genai_error).__name__}")
+            if hasattr(genai_error, 'response'):
+                print(f"Error response: {genai_error.response}")
+            raise
     except HTTPException:
         raise
     except Exception as e:
@@ -449,11 +513,9 @@ async def genai_status():
         "google_generativeai_installed": genai is not None,
         "gemini_api_key_present": bool(GEMINI_API_KEY),
         "gemini_model_ready": gemini_model is not None,
-        "model_name": getattr(getattr(gemini_model, "model_name", None), "__str__", lambda: None)() if gemini_model else None,
+        "model_name": getattr(getattr(gemini_model, "model_name", None), "str", lambda: None)() if gemini_model else None,
     }
 
 
 if __name__ == "__main__":
     uvicorn.run("app:app", host="0.0.0.0", port=5001, reload=True)
-
-

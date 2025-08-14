@@ -10,6 +10,7 @@ import { styled, createTheme, ThemeProvider } from "@mui/material/styles";
 import CssBaseline from "@mui/material/CssBaseline";
 import TextField from "@mui/material/TextField";
 import BrushIcon from "@mui/icons-material/Brush";
+import DownloadIcon from "@mui/icons-material/Download";
 import AccountCircleIcon from "@mui/icons-material/AccountCircle";
 import InfoIcon from "@mui/icons-material/Info";
 import CloseIcon from "@mui/icons-material/Close";
@@ -174,10 +175,27 @@ function App() {
   
   const downloadAIDrawing = () => {
     if (!aiImage) return;
+    
+    // Get current date and time for filename
+    const now = new Date();
+    const timestamp = now.toISOString()
+      .replace(/[:.]/g, '-')
+      .replace('T', '_')
+      .split('+')[0];
+    
+    // Create a temporary anchor element to trigger download
     const link = document.createElement('a');
-    link.download = 'ai_drawing.png';
+    link.download = `ai_doodle_${prediction || 'generated'}_${timestamp}.png`;
     link.href = aiImage;
+    
+    // Add to document, trigger click, and clean up
+    document.body.appendChild(link);
     link.click();
+    document.body.removeChild(link);
+    
+    // Show feedback to user
+    setFeedback('AI doodle downloaded!');
+    setTimeout(() => setFeedback(''), 2000);
   };
 
   const downloadProcessedImage = async () => {
@@ -205,7 +223,7 @@ function App() {
       link.download = 'processed.png';
       document.body.appendChild(link);
       link.click();
-      link.remove();
+      document.body.removeChild(link);
       URL.revokeObjectURL(url);
       setFeedback('Processed image downloaded');
       setTimeout(() => setFeedback(''), 1500);
@@ -408,6 +426,40 @@ function App() {
     }
   };
 
+  const announcePrediction = (message) => {
+    if (!message) return;
+    
+    // Cancel any ongoing speech
+    window.speechSynthesis.cancel();
+    
+    // Create a new speech synthesis utterance
+    const utterance = new SpeechSynthesisUtterance(message);
+    
+    // Set voice properties
+    utterance.rate = 0.9; // Slightly slower than normal
+    utterance.pitch = 1.1; // Slightly higher pitch
+    utterance.volume = 1.0; // Full volume
+    
+    // Find a good voice
+    const voices = window.speechSynthesis.getVoices();
+    const preferredVoices = voices.filter(voice => 
+      voice.lang.includes('en') && voice.name.includes('Google')
+    );
+    
+    if (preferredVoices.length > 0) {
+      utterance.voice = preferredVoices[0];
+    } else if (voices.length > 0) {
+      // Fallback to any available English voice
+      const englishVoices = voices.filter(voice => voice.lang.includes('en'));
+      if (englishVoices.length > 0) {
+        utterance.voice = englishVoices[0];
+      }
+    }
+    
+    // Speak the message
+    window.speechSynthesis.speak(utterance);
+  };
+
   const handlePredict = async () => {
     setLoading(true);
     try {
@@ -416,19 +468,25 @@ function App() {
       // Check if there's any drawing on the canvas
       const hasDrawing = imageData.image.some(pixel => pixel > 0.1);
       if (!hasDrawing) {
+        const message = "Please draw something on the canvas first.";
         setPrediction("No Drawing");
         setPredictionConfidence(0);
         setTopPredictions([]);
-        setGenAiPrediction("Please draw something on the canvas first.");
+        setGenAiPrediction(message);
+        announcePrediction(message);
         setLoading(false);
         return;
       }
+      
+      // Speak that we're processing
+      announcePrediction("Analyzing your drawing...");
       
       const response = await fetch(`${BACKEND_URL}/predict`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(imageData),
       });
+      
       if (!response.ok) {
         let errMsg = 'Prediction failed';
         try {
@@ -441,18 +499,23 @@ function App() {
         setPredictionConfidence(0);
         setTopPredictions([]);
         setGenAiPrediction(errMsg);
+        announcePrediction(errMsg);
         return;
       }
+      
       const result = await response.json();
       
       if (result.error) {
+        const errorMessage = result.error || "Something went wrong. Please try again.";
         setPrediction("Error");
         setPredictionConfidence(0);
         setTopPredictions([]);
-        setGenAiPrediction(result.error || "Something went wrong. Please try again.");
+        setGenAiPrediction(errorMessage);
+        announcePrediction(errorMessage);
         return;
       }
       
+      // Update the UI with prediction results
       setPrediction(result.label);
       setPredictionConfidence(result.confidence);
       
@@ -467,23 +530,32 @@ function App() {
       
       // Get AI interpretation if confidence is low or if it's the top prediction
       if (result.confidence < 0.7) {
-        setGenAiPrediction("Analyzing your drawing...");
+        const loadingMessage = "Analyzing your drawing...";
+        setGenAiPrediction(loadingMessage);
+        announcePrediction(loadingMessage);
+        
         const interpretation = await getAIInterpretation(
-          imageData.image, // Send just the image array for AI interpretation
+          imageData.image,
           result.label,
           result.confidence
         );
+        
         setGenAiPrediction(interpretation);
+        announcePrediction(interpretation);
       } else {
-        setGenAiPrediction(`I'm quite confident this is a ${result.label}!`);
+        const message = `I'm ${Math.round(result.confidence * 100)}% confident this is a ${result.label}!`;
+        setGenAiPrediction(message);
+        announcePrediction(message);
       }
       
     } catch (err) {
       console.error("Prediction error:", err);
+      const errorMessage = "Error making prediction. Please try again.";
       setPrediction("Error");
       setPredictionConfidence(0);
       setTopPredictions([]);
-      setGenAiPrediction("Network error. Please check if the backend is running.");
+      setGenAiPrediction(errorMessage);
+      announcePrediction(errorMessage);
     } finally {
       setLoading(false);
     }
@@ -492,26 +564,53 @@ function App() {
   const handleGenAiPredict = async () => {
     try {
       setGenAiLoading(true);
+      setAiImage("");  // Clear previous image
       const canvas = canvasRef.current;
-      // Use JPEG for smaller payload; backend accepts any common mime
-      const dataUrl = canvas.toDataURL('image/jpeg', 0.9);
+      
+      // First, get the prediction if we don't have one
+      if (!prediction) {
+        await handlePredict();
+        if (!prediction) {
+          throw new Error('Please draw something and get a prediction first');
+        }
+      }
 
-      const resp = await fetch(`${BACKEND_URL}/genai_guess`, {
+      // Show a loading message
+      setGenAiPrediction('Analyzing your drawing with AI...');
+
+      // Call the genai_guess endpoint
+      const response = await fetch(`${BACKEND_URL}/genai_guess`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ image: dataUrl })
+        body: JSON.stringify({
+          image: canvas.toDataURL('image/png'),
+          prompt: `What is this drawing? Choose one of: apple, airplane, cat, car, dog, flower, star, tree, umbrella, fish.`
+        })
       });
-      if (!resp.ok) {
-        const err = await resp.json().catch(() => ({}));
-        const detail = err && (err.detail || err.message);
-        throw new Error(detail || `GenAI request failed (${resp.status})`);
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.detail || errorData.error || `Request failed with status ${response.status}`);
       }
-      const json = await resp.json();
-      setGenAiPrediction(json.guess || 'Unknown');
-    } catch (e) {
-      console.error(e);
-      // Surface the specific error for easier debugging
-      setGenAiPrediction(`GenAI is unavailable: ${e.message || e}`);
+
+      const data = await response.json();
+      
+      if (data.guess) {
+        // Update the prediction with the AI's guess
+        setGenAiPrediction(`The AI thinks this is a: ${data.guess}`);
+        
+        // If the AI's guess is different from our initial prediction, update it
+        if (data.guess.toLowerCase() !== prediction.toLowerCase()) {
+          setPrediction(data.guess.toLowerCase());
+          // You might want to update the confidence score as well
+          setPredictionConfidence(0.9); // High confidence for the AI's guess
+        }
+      } else {
+        throw new Error('No guess returned from AI');
+      }
+    } catch (error) {
+      console.error('Error getting AI guess:', error);
+      setGenAiPrediction(`Error: ${error.message || 'Failed to get AI analysis. Please try again.'}`);
     } finally {
       setGenAiLoading(false);
     }
@@ -710,16 +809,71 @@ function App() {
                 color="secondary"
                 onClick={downloadUserDrawing}
                 sx={{ fontWeight: 700 }}
-              >Download Drawing
+              >
+                Download Drawing
               </Button>
               <Button
-                variant="outlined"
-                color="secondary"
+                variant="contained"
+                color="primary"
                 onClick={downloadAIDrawing}
                 disabled={!aiImage}
-                sx={{ fontWeight: 700 }}
-              >Download AI Image
+                sx={{ 
+                  fontWeight: 700,
+                  background: 'linear-gradient(45deg, #1976d2 0%, #2196f3 100%)',
+                  '&:hover': {
+                    background: 'linear-gradient(45deg, #1565c0 0%, #1e88e5 100%)',
+                    boxShadow: '0 4px 12px rgba(30, 136, 229, 0.3)'
+                  },
+                  '&.Mui-disabled': {
+                    background: '#e0e0e0',
+                    color: '#9e9e9e'
+                  },
+                  textTransform: 'none',
+                  fontSize: '0.9rem',
+                  px: 3,
+                  py: 1,
+                  borderRadius: 2,
+                  boxShadow: '0 2px 8px rgba(0,0,0,0.1)',
+                  transition: 'all 0.3s ease'
+                }}
+                startIcon={<DownloadIcon />}
+              >
+                {aiImage ? 'Download Cartoon' : 'Generating...'}
               </Button>
+              {aiImage && (
+                <Box sx={{ 
+                  mt: 3, 
+                  textAlign: 'center',
+                  backgroundColor: 'background.paper',
+                  p: 2,
+                  borderRadius: 2,
+                  boxShadow: 1
+                }}>
+                  <Typography variant="h6" gutterBottom>
+                    AI Generated Doodle
+                  </Typography>
+                  <Box sx={{ 
+                    display: 'flex', 
+                    justifyContent: 'center',
+                    mb: 2,
+                    backgroundColor: 'background.default',
+                    p: 1,
+                    borderRadius: 1,
+                    boxShadow: '0 2px 8px rgba(0,0,0,0.1)'
+                  }}>
+                    <img 
+                      src={aiImage} 
+                      alt="AI Generated Doodle" 
+                      style={{ 
+                        maxWidth: '100%', 
+                        maxHeight: '280px', 
+                        objectFit: 'contain',
+                        borderRadius: '4px'
+                      }} 
+                    />
+                  </Box>
+                </Box>
+              )}
               <Button
                 variant="outlined"
                 color="secondary"
