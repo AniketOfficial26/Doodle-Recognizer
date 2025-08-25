@@ -1,11 +1,17 @@
+<<<<<<< HEAD
 # See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
 
 # dependencies
 /node_modules
+=======
+# dependencies
+node_modules/
+>>>>>>> 1aa89e7630c8a97a74230121dfda5766ee691fe5
 /.pnp
 .pnp.js
 
 # testing
+<<<<<<< HEAD
 /coverage
 
 # production
@@ -75,3 +81,16 @@ Thumbs.db
 
 # Logs
 *.log
+=======
+coverage/
+
+# production
+build/
+
+# misc
+.DS_Store
+.env
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+>>>>>>> 1aa89e7630c8a97a74230121dfda5766ee691fe5
