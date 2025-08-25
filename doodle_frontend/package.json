@@ -2,6 +2,7 @@
   "name": "doodle_frontend",
   "version": "0.1.0",
   "private": true,
+  "engines": { "node": ">=18 <21", "npm": ">=8" },
   "dependencies": {
     "@emotion/react": "^11.14.0",
     "@emotion/styled": "^11.14.1",
@@ -19,6 +20,7 @@
     "serve": "^14.2.3"
   },
   "scripts": {
+    "preinstall": "rm -f package-lock.json || true",
     "start": "react-scripts start",
     "build": "react-scripts build",
     "serve": "serve -s build",
