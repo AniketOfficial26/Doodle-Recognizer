@@ -8,7 +8,7 @@
       "package.json",
       "package-lock.json"
     ],
-    "buildCommand": "npm run build",
+    "buildCommand": "CI=false npm run build",
     "nixpacksPlan": {
       "providers": ["node"],
       "phases": {
