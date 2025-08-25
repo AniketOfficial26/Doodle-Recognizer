@@ -1,0 +1,67 @@
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.pytype/
+.nox/
+.tox/
+
+# Virtual environments
+venv/
+.env/
+.venv/
+env/
+ENV/
+.python-version
+
+# Environment and secrets (never commit keys)
+*.env
+.env.*
+!.env.example
+
+# Logs and coverage
+logs/
+*.log
+coverage.xml
+htmlcov/
+.coverage
+.coverage.*
+
+# Build and packaging
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# IDE/editor
+.vscode/
+.idea/
+*.code-workspace
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# Large/derived ML artifacts
+*.keras
+*.h5
+*.hdf5
+*.onnx
+*.pt
+*.pth
+*.pkl
+models/
+checkpoints/
+artifacts/
+outputs/
+data/
+tmp/
+.cache/
+
+# Images or uploads (if generated/stored temporarily)
+uploads/
+generated/
