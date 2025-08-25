@@ -1,198 +1,175 @@
-import React, { useRef, useState, useEffect } from "react";
-import AppBar from "@mui/material/AppBar";
-import Toolbar from "@mui/material/Toolbar";
-import Typography from "@mui/material/Typography";
-import Button from "@mui/material/Button";
-import Paper from "@mui/material/Paper";
-import Box from "@mui/material/Box";
-import CircularProgress from "@mui/material/CircularProgress";
-import { styled, createTheme, ThemeProvider } from "@mui/material/styles";
-import CssBaseline from "@mui/material/CssBaseline";
-import TextField from "@mui/material/TextField";
-import BrushIcon from "@mui/icons-material/Brush";
-import DownloadIcon from "@mui/icons-material/Download";
-import AccountCircleIcon from "@mui/icons-material/AccountCircle";
-import InfoIcon from "@mui/icons-material/Info";
-import CloseIcon from "@mui/icons-material/Close";
-import IconButton from "@mui/material/IconButton";
-import Fade from "@mui/material/Fade";
-import Backdrop from "@mui/material/Backdrop";
-import './App.css';
-import './funky.css';
-// import CATEGORIES from './categories';
+/** @jsxImportSource @emotion/react */
+import React, { useRef, useState, useEffect } from 'react';
+import { css } from '@emotion/react';
+import Config from './core/config/Config';
+import { ImageProcessor } from './core/image/ImageProcessor';
+import { PredictionClient } from './core/services/PredictionClient';
+import { AIImageService } from './core/services/AIImageService';
+import { SpeechService } from './core/services/SpeechService';
+import { DownloadService } from './core/services/DownloadService';
+import { Validation } from './core/utils/Validation';
+import { Time } from './core/utils/Time';
+import colors from './constants/colors';
+import {
+  GlowingText,
+  ShinyText,
+  AppContainer,
+  MainContainer,
+  Header,
+  HeaderLeft,
+  Footer,
+  BrushIcon,
+  InfoButton,
+  ColorPicker,
+  MainContent,
+  Panel,
+  DarkPanel,
+  SectionTitle,
+  Button,
+  CanvasContainer,
+  CanvasWrapper,
+  Canvas,
+  ButtonGroup,
+  CanvasFrame,
+  HamburgerButton,
+  MobileMenuOverlay,
+  MobileMenuContent,
+  MobileMenuHeader,
+  MobilePredictionBox,
+  MobileOnly,
+  MobileActionsBar,
+  Modal,
+  ModalContent,
+  CloseButton,
+  LoadingSpinner,
+  FeedbackBox,
+} from './ui/Styled';
 
 // Centralized backend URL to avoid port mismatches
-const BACKEND_URL = process.env.REACT_APP_BACKEND_URL || 'http://localhost:5001';
+const BACKEND_URL = Config.BACKEND_URL;
 
-const darkTheme = createTheme({
-  palette: {
-    mode: 'dark',
-    primary: {
-      main: '#6366f1',
-    },
-    secondary: {
-      main: '#06b6d4',
-    },
-    background: {
-      default: '#18181b',
-      paper: '#232336',
-    },
-    text: {
-      primary: '#f3f4f6',
-      secondary: '#a5b4fc',
-    },
-  },
-  typography: {
-    fontFamily: 'Inter, Roboto, Helvetica Neue, Arial, sans-serif',
-  },
-});
+// Color palette moved to src/constants/colors.js
 
-// const CanvasContainer = styled(Paper)(({ theme }) => ({
-//   margin: 'auto',
-//   padding: theme.spacing(3),
-//   maxWidth: 600,
-//   background: theme.palette.background.paper,
-//   boxShadow: '0 8px 32px 0 rgba(31, 38, 135, 0.37)',
-//   borderRadius: 28,
-//   border: '1px solid #27273a',
-// }));
-
-// Responsive canvas size (wide 16:9 aspect ratio, max 96vw x 54vw)
-const getResponsiveCanvasSize = () => {
-  const maxW = Math.min(window.innerWidth * 0.96, 1200);
-  const width = Math.floor(maxW);
-  const height = Math.floor(width * 9 / 16);
-  return { width, height };
+// Fixed canvas size - do not change
+const getCanvasSize = () => {
+  return { width: 800, height: 600 };
 };
 
 const DEFAULT_STROKE_COLOR = '#000000'; // default black stroke for drawing
 
-// Helper function to resize and compress canvas image to 28x28 pixels
-const resizeAndCompressImage = (canvas, quality = 0.8) => {
-  // Create a temporary canvas for resizing
-  const tempCanvas = document.createElement('canvas');
-  const tempCtx = tempCanvas.getContext('2d');
-  
-  // Set target size to 28x28
-  tempCanvas.width = 28;
-  tempCanvas.height = 28;
-  
-  // Fill with white background (important for doodle recognition)
-  tempCtx.fillStyle = '#FFFFFF';
-  tempCtx.fillRect(0, 0, 28, 28);
-  
-  // Draw the original canvas content scaled down to 28x28
-  tempCtx.drawImage(canvas, 0, 0, canvas.width, canvas.height, 0, 0, 28, 28);
-  
-  // Return compressed image data URL
-  return tempCanvas.toDataURL('image/jpeg', quality);
-};
-
 function App() {
-  // --- Confetti state ---
-  const [showConfetti, setShowConfetti] = useState(false);
-  const confettiRef = useRef(null);
-
-  // Free draw state
+  // Canvas and drawing state
+  const canvasRef = useRef(null);
+  const [drawing, setDrawing] = useState(false);
+  const [prediction, setPrediction] = useState("");
+  const [predictionConfidence, setPredictionConfidence] = useState(0);
+  const [topPredictions, setTopPredictions] = useState([]);
+  const [genAiPrediction, setGenAiPrediction] = useState("");
+  const [genAiLoading, setGenAiLoading] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [showTerms, setShowTerms] = useState(false);
+  const [activeTab, setActiveTab] = useState('privacy'); // 'privacy' or 'terms'
+  
+  // UI state
   const [feedback, setFeedback] = useState('');
   const [aiImage, setAiImage] = useState(""); // base64 or URL for AI image
   const [isErasing, setIsErasing] = useState(false); // new state for eraser
+  const [isEnhancing, setIsEnhancing] = useState(false); // Loading state for enhance button
+  const [showInfo, setShowInfo] = useState(false);
+  const [strokeWidth, setStrokeWidth] = useState(36); // Increased default brush size to 36
+  const [brushColor, setBrushColor] = useState(DEFAULT_STROKE_COLOR);
+  const [canvasSize, setCanvasSize] = useState(getCanvasSize());
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
-  // Get raw pixel data in original canvas size
-  const getRawPixelData = () => {
-    const canvas = canvasRef.current;
-    const width = canvas.width;
-    const height = canvas.height;
+  // Remove responsive canvas size handler since canvas size is now fixed
+  // useEffect(() => {
+  //   const handleResize = () => {
+  //     setCanvasSize(getCanvasSize());
+  //   };
+  //   window.addEventListener('resize', handleResize);
+  //   return () => window.removeEventListener('resize', handleResize);
+  // }, []);
+
+  // Info modal keyboard handler
+  useEffect(() => {
+    const handleKeyDown = (event) => {
+      if (event.key === 'Escape' && showInfo) {
+        setShowInfo(false);
+      }
+    };
     
-    // Create a temporary canvas to process the image
-    const tempCanvas = document.createElement('canvas');
-    tempCanvas.width = width;
-    tempCanvas.height = height;
-    const tempCtx = tempCanvas.getContext('2d');
-    
-    // Fill with white background
-    tempCtx.fillStyle = '#FFFFFF';
-    tempCtx.fillRect(0, 0, width, height);
-    
-    // Draw the original content
-    tempCtx.drawImage(canvas, 0, 0);
-    
-    // Get image data
-    const imageData = tempCtx.getImageData(0, 0, width, height);
-    const pixels = imageData.data;
-    
-    // Convert to grayscale and normalize to 0-1
-    const pixelData = [];
-    for (let i = 0; i < pixels.length; i += 4) {
-      // Calculate grayscale (invert colors so drawing is black on white)
-      const gray = 255 - (pixels[i] + pixels[i + 1] + pixels[i + 2]) / 3;
-      pixelData.push(gray / 255.0); // Normalize to 0-1
+    if (showInfo) {
+      document.addEventListener('keydown', handleKeyDown);
+      document.body.style.overflow = 'hidden';
+    } else {
+      document.body.style.overflow = 'unset';
     }
     
-    return { 
-      pixelArray: pixelData, 
-      width: width, 
-      height: height,
-      originalWidth: canvas.width,
-      originalHeight: canvas.height
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown);
+      document.body.style.overflow = 'unset';
     };
+  }, [showInfo]);
+
+  // Initialize canvas
+  useEffect(() => {
+    if (canvasRef.current) {
+      clearCanvas();
+    }
+  }, [canvasSize]);
+
+  // Initial reset
+  useEffect(() => {
+    resetCanvasAndFeedback();
+  }, []);
+
+  // Generate AI image via Together AI and download it
+  const handleEnhance = async () => {
+    if (!canvasRef.current) return;
+    try {
+      setIsEnhancing(true);
+      const outBlob = await AIImageService.cartoonizeFromCanvas(canvasRef.current, prediction);
+      const url = URL.createObjectURL(outBlob);
+      
+      // Set the AI image for display
+      setAiImage(url);
+      
+      // Auto-download
+      const filename = DownloadService.timestamped('generated_doodle', 'png');
+      // Use the same object URL for download to preserve behavior (no revoke)
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+    } catch (e) {
+      console.error('Generate error:', e);
+      setGenAiPrediction(`Error generating AI image: ${e.message || e}`);
+    } finally {
+      setIsEnhancing(false);
+    }
   };
 
   // Download user drawing in original size as PNG
   const downloadUserDrawing = () => {
     const canvas = canvasRef.current;
-    
-    // Create a temporary canvas with the same size as the original
+    // Create a white-background PNG from the original canvas
     const tempCanvas = document.createElement('canvas');
     tempCanvas.width = canvas.width;
     tempCanvas.height = canvas.height;
     const tempCtx = tempCanvas.getContext('2d');
-    
-    // Fill with white background
     tempCtx.fillStyle = '#FFFFFF';
     tempCtx.fillRect(0, 0, canvas.width, canvas.height);
-    
-    // Draw the original content
     tempCtx.drawImage(canvas, 0, 0);
-    
-    // Convert to PNG with no compression
     const pngData = tempCanvas.toDataURL('image/png');
-    
-    // Get current date and time for filename
-    const now = new Date();
-    const timestamp = now.toISOString()
-      .replace(/[:.]/g, '-')
-      .replace('T', '_')
-      .split('+')[0];
-    
-    // Download the image
-    const link = document.createElement('a');
-    link.download = `doodle_${timestamp}.png`;
-    link.href = pngData;
-    link.click();
+    DownloadService.downloadDataUrl(DownloadService.timestamped('doodle', 'png'), pngData);
   };
 
-  
   const downloadAIDrawing = () => {
     if (!aiImage) return;
-    
-    // Get current date and time for filename
-    const now = new Date();
-    const timestamp = now.toISOString()
-      .replace(/[:.]/g, '-')
-      .replace('T', '_')
-      .split('+')[0];
-    
-    // Create a temporary anchor element to trigger download
-    const link = document.createElement('a');
-    link.download = `ai_doodle_${prediction || 'generated'}_${timestamp}.png`;
-    link.href = aiImage;
-    
-    // Add to document, trigger click, and clean up
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    
+    const filename = `ai_doodle_${(prediction || 'generated')}_${Time.timestamp()}.png`;
+    DownloadService.downloadDataUrl(filename, aiImage);
     // Show feedback to user
     setFeedback('AI doodle downloaded!');
     setTimeout(() => setFeedback(''), 2000);
@@ -201,30 +178,13 @@ function App() {
   const downloadProcessedImage = async () => {
     try {
       const imageData = getImageData();
-
-      // Prevent blank downloads if nothing is drawn
-      const hasDrawing = imageData.image.some((pixel) => pixel > 0.1);
-      if (!hasDrawing) {
+      if (!Validation.hasDrawing(imageData.image)) {
         setFeedback('Please draw something first');
         setTimeout(() => setFeedback(''), 1500);
         return;
       }
-
-      const response = await fetch(`${BACKEND_URL}/download_processed`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(imageData)
-      });
-      if (!response.ok) throw new Error('Failed to fetch processed image');
-      const blob = await response.blob();
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = url;
-      link.download = 'processed.png';
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      URL.revokeObjectURL(url);
+      const blob = await PredictionClient.downloadProcessed(imageData);
+      DownloadService.downloadBlob('processed.png', blob);
       setFeedback('Processed image downloaded');
       setTimeout(() => setFeedback(''), 1500);
     } catch (err) {
@@ -242,58 +202,6 @@ function App() {
     setGenAiPrediction("");
     clearCanvas();
   };
-
-
-  useEffect(() => {
-    resetCanvasAndFeedback();
-    // eslint-disable-next-line
-  }, []);
-
-  // Removed unused legacy submit function that pointed to port 5000 to prevent confusion
-
-  const canvasRef = useRef(null);
-  const [drawing, setDrawing] = useState(false);
-  const [prediction, setPrediction] = useState("");
-  const [predictionConfidence, setPredictionConfidence] = useState(0);
-  const [topPredictions, setTopPredictions] = useState([]);
-  const [genAiPrediction, setGenAiPrediction] = useState("");
-  const [genAiLoading, setGenAiLoading] = useState(false);
-  const [loading, setLoading] = useState(false);
-  const [username, setUsername] = useState("");
-  const [showInfo, setShowInfo] = useState(false);
-  const [strokeWidth, setStrokeWidth] = useState(4);
-  const [brushColor, setBrushColor] = useState(DEFAULT_STROKE_COLOR);
-  const [canvasSize, setCanvasSize] = useState(getResponsiveCanvasSize());
-
-  useEffect(() => {
-    const handleResize = () => {
-      setCanvasSize(getResponsiveCanvasSize());
-    };
-    window.addEventListener('resize', handleResize);
-    return () => window.removeEventListener('resize', handleResize);
-  }, []);
-
-
-  useEffect(() => {
-    const handleKeyDown = (event) => {
-      if (event.key === 'Escape' && showInfo) {
-        setShowInfo(false);
-      }
-    };
-    
-    if (showInfo) {
-      document.addEventListener('keydown', handleKeyDown);
-     
-      document.body.style.overflow = 'hidden';
-    } else {
-      document.body.style.overflow = 'unset';
-    }
-    
-    return () => {
-      document.removeEventListener('keydown', handleKeyDown);
-      document.body.style.overflow = 'unset';
-    };
-  }, [showInfo]);
 
   // Drawing logic
   const getPointerPos = (e) => {
@@ -341,82 +249,16 @@ function App() {
     ctx.fillRect(0, 0, canvas.width, canvas.height);
   };
 
-  useEffect(() => {
-    if (canvasRef.current) {
-      clearCanvas();
-    }
-  }, [canvasSize]);
-
   const getImageData = () => {
-    const canvas = canvasRef.current;
-  
-    // Create a 28x28 resized version for consistent ML input
-    const tempCanvas = document.createElement('canvas');
-    const tempCtx = tempCanvas.getContext('2d');
-    tempCanvas.width = 28;
-    tempCanvas.height = 28;
-  
-    // Fill with white background
-    tempCtx.fillStyle = '#FFFFFF';
-    tempCtx.fillRect(0, 0, 28, 28);
-  
-    // Draw the original canvas scaled to 28x28
-    tempCtx.drawImage(canvas, 0, 0, canvas.width, canvas.height, 0, 0, 28, 28);
-  
-    // Get image data from the resized canvas
-    const imageData = tempCtx.getImageData(0, 0, 28, 28);
-    const data = imageData.data;
-  
-    // Convert to grayscale and normalize to 0-1 range
-    // For doodle recognition models, typically:
-    // - 0 = background (white/empty)
-    // - 1 = drawing (black/drawn pixels)
-    const normalizedData = [];
-    for (let i = 0; i < data.length; i += 4) {
-      const r = data[i];
-      const g = data[i + 1];
-      const b = data[i + 2];
-      
-      // Calculate grayscale value (0-255)
-      const gray = (r + g + b) / 3;
-      
-      // Invert and normalize: 
-      // - White pixels (255) become 0 (background)
-      // - Black pixels (0) become 1 (drawing)
-      // - Gray pixels are scaled accordingly
-      const normalized = (255 - gray) / 255;
-      normalizedData.push(normalized);
-    }
-  
-    return {
-      image: normalizedData,
-      width: 28,
-      height: 28
-    };
+    return ImageProcessor.to28x28Grayscale(canvasRef.current);
   };
 
   const getAIInterpretation = async (imageData, prediction, confidence) => {
     try {
       setGenAiLoading(true);
-      // Get the canvas as base64 image
-      const canvas = canvasRef.current;
-      const imageBase64 = canvas.toDataURL('image/jpeg', 0.8);
-      
-      const response = await fetch(`${BACKEND_URL}/interpret`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          image: imageBase64,
-          prediction: prediction,
-          confidence: confidence
-        }),
-      });
-      
-      const result = await response.json();
-      if (result.error) {
-        throw new Error(result.error);
-      }
-      
+      const imageBase64 = canvasRef.current.toDataURL('image/jpeg', 0.8);
+      const result = await PredictionClient.interpret(imageBase64, prediction, confidence);
+      if (result.error) throw new Error(result.error);
       return result.interpretation;
     } catch (err) {
       console.error("AI interpretation error:", err);
@@ -427,37 +269,7 @@ function App() {
   };
 
   const announcePrediction = (message) => {
-    if (!message) return;
-    
-    // Cancel any ongoing speech
-    window.speechSynthesis.cancel();
-    
-    // Create a new speech synthesis utterance
-    const utterance = new SpeechSynthesisUtterance(message);
-    
-    // Set voice properties
-    utterance.rate = 0.9; // Slightly slower than normal
-    utterance.pitch = 1.1; // Slightly higher pitch
-    utterance.volume = 1.0; // Full volume
-    
-    // Find a good voice
-    const voices = window.speechSynthesis.getVoices();
-    const preferredVoices = voices.filter(voice => 
-      voice.lang.includes('en') && voice.name.includes('Google')
-    );
-    
-    if (preferredVoices.length > 0) {
-      utterance.voice = preferredVoices[0];
-    } else if (voices.length > 0) {
-      // Fallback to any available English voice
-      const englishVoices = voices.filter(voice => voice.lang.includes('en'));
-      if (englishVoices.length > 0) {
-        utterance.voice = englishVoices[0];
-      }
-    }
-    
-    // Speak the message
-    window.speechSynthesis.speak(utterance);
+    SpeechService.announce(message);
   };
 
   const handlePredict = async () => {
@@ -466,7 +278,7 @@ function App() {
       const imageData = getImageData();
       
       // Check if there's any drawing on the canvas
-      const hasDrawing = imageData.image.some(pixel => pixel > 0.1);
+      const hasDrawing = Validation.hasDrawing(imageData.image);
       if (!hasDrawing) {
         const message = "Please draw something on the canvas first.";
         setPrediction("No Drawing");
@@ -480,30 +292,7 @@ function App() {
       
       // Speak that we're processing
       announcePrediction("Analyzing your drawing...");
-      
-      const response = await fetch(`${BACKEND_URL}/predict`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(imageData),
-      });
-      
-      if (!response.ok) {
-        let errMsg = 'Prediction failed';
-        try {
-          const err = await response.json();
-          if (err && (err.detail || err.message)) {
-            errMsg = err.detail || err.message;
-          }
-        } catch {}
-        setPrediction("Error");
-        setPredictionConfidence(0);
-        setTopPredictions([]);
-        setGenAiPrediction(errMsg);
-        announcePrediction(errMsg);
-        return;
-      }
-      
-      const result = await response.json();
+      const result = await PredictionClient.predict(imageData);
       
       if (result.error) {
         const errorMessage = result.error || "Something went wrong. Please try again.";
@@ -578,22 +367,11 @@ function App() {
       // Show a loading message
       setGenAiPrediction('Analyzing your drawing with AI...');
 
-      // Call the genai_guess endpoint
-      const response = await fetch(`${BACKEND_URL}/genai_guess`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          image: canvas.toDataURL('image/png'),
-          prompt: `What is this drawing? Choose one of: apple, airplane, cat, car, dog, flower, star, tree, umbrella, fish.`
-        })
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        throw new Error(errorData.detail || errorData.error || `Request failed with status ${response.status}`);
-      }
-
-      const data = await response.json();
+      // Call the genai_guess endpoint via client
+      const data = await PredictionClient.genAIGuess(
+        canvas.toDataURL('image/png'),
+        'What is this drawing? Choose one of: apple, airplane, cat, car, dog, flower, star, tree, umbrella, fish.'
+      );
       
       if (data.guess) {
         // Update the prediction with the AI's guess
@@ -616,579 +394,808 @@ function App() {
     }
   };
 
-
-  const handlePredictAndGenerate = async () => {
-    await handlePredict();
-    await handleGenAiPredict();
-  };
-
   return (
-    <ThemeProvider theme={darkTheme}>
-      <CssBaseline />
-      <Box sx={{ minHeight: '100vh', background: 'radial-gradient(ellipse at top right, #232336 60%, #18181b 100%)', p: 0 }}>
-        <AppBar position="static" color="primary" sx={{ background: 'linear-gradient(90deg, #232336 40%, #6366f1 100%)', boxShadow: 3 }}>
-          <Toolbar sx={{ display: 'flex', gap: 2 }}>
-            <BrushIcon sx={{ mr: 1, fontSize: 32 }} />
-            <Typography
-              variant="h4"
-              sx={{
-                flexGrow: 1,
-                fontWeight: 600,
-                letterSpacing: 1.5,
-                fontFamily: 'Inter, Roboto, Helvetica Neue, Arial, sans-serif',
-                color: '#f8fafc',
-                display: 'flex',
-                alignItems: 'center',
-                gap: 2,
-                textShadow: '0 1px 3px rgba(0, 0, 0, 0.3)',
-                userSelect: 'none',
-              }}
-            >
-              <svg width="28" height="28" viewBox="0 0 24 24" fill="none" style={{ marginRight: 8 }}>
-                <path d="M12 2L13.09 8.26L20 9L13.09 9.74L12 16L10.91 9.74L4 9L10.91 8.26L12 2Z" fill="#06b6d4" opacity="0.9" />
-                <path d="M19 15L19.5 17L21.5 17.5L19.5 18L19 20L18.5 18L16.5 17.5L18.5 17L19 15Z" fill="#f472b6" opacity="0.8" />
-                <path d="M5 6L5.5 7.5L7 8L5.5 8.5L5 10L4.5 8.5L3 8L4.5 7.5L5 6Z" fill="#a5b4fc" opacity="0.7" />
-              </svg>
-              Doodle Recognizer
-            </Typography>
-            <Button
-              variant="outlined"
-              color="secondary"
-              onClick={() => setShowInfo(true)}
-              startIcon={<InfoIcon />}
-              sx={{ 
-                fontWeight: 600, 
-                borderRadius: 12, 
-                px: 3, 
-                py: 1, 
-                fontSize: 16, 
-                mr: 2,
-                background: 'rgba(255,255,255,0.1)',
-                backdropFilter: 'blur(10px)',
-                border: '1px solid rgba(255,255,255,0.2)',
-                transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
-                '&:hover': {
-                  background: 'rgba(255,255,255,0.2)',
-                  border: '1px solid rgba(255,255,255,0.4)',
-                  transform: 'translateY(-2px)',
-                  boxShadow: '0 8px 25px rgba(99, 102, 241, 0.3)' 
-                }
-              }}
-            >
-              About
-            </Button>
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, background: '#232336', borderRadius: 2, px: 2, py: 0.5, boxShadow: 2 }}>
-              <AccountCircleIcon sx={{ color: '#a5b4fc', fontSize: 28 }} />
-              <TextField
-                variant="standard"
-                placeholder="Enter username"
-                value={username}
-                onChange={(e) => setUsername(e.target.value)}
-                InputProps={{
-                  disableUnderline: true,
-                  style: { color: '#f3f4f6', fontWeight: 500, fontSize: 18, letterSpacing: 1 },
-                }}
-                sx={{ width: 160, ml: 1 }}
-              />
-            </Box>
-          </Toolbar>
-        </AppBar>
-        <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', width: '100%', p: 3 }}>
-          {/* Control Buttons - Above canvas */}
-          <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', width: '100%', mb: 3 }}>
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 2, flexWrap: 'wrap', justifyContent: 'center' }}>
-              <Button
-                variant="outlined"
-                color="secondary"
-                onClick={() => setStrokeWidth(Math.max(1, strokeWidth - 2))}
-                sx={{ minWidth: 36, px: 0, fontWeight: 700 }}
-              >-
-              </Button>
-              <Typography sx={{ mx: 1, fontWeight: 700, fontSize: 18, color: '#6366f1' }}>
-                Brush: {strokeWidth}px
-              </Typography>
-              <Button
-                variant="outlined"
-                color="secondary"
-                onClick={() => setStrokeWidth(Math.min(100, strokeWidth + 2))}
-                sx={{ minWidth: 36, px: 0, fontWeight: 700 }}
-              >+
-              </Button>
-              <Button
-                variant={isErasing ? "contained" : "outlined"}
-                color={isErasing ? "primary" : "secondary"}
-                onClick={() => setIsErasing(!isErasing)}
-                sx={{ fontWeight: 700 }}
-              >{isErasing ? 'Eraser (On)' : 'Eraser'}
-              </Button>
-              
-              {/*  Color Palette */}
-              <Box sx={{ 
-                display: 'flex', 
-                alignItems: 'center', 
-                gap: 2, 
-                ml: 3,
-                background: 'linear-gradient(135deg, rgba(255,255,255,0.1) 0%, rgba(255,255,255,0.05) 100%)',
-                backdropFilter: 'blur(10px)',
-                borderRadius: 3,
-                padding: '12px 16px',
-                border: '1px solid rgba(255,255,255,0.1)',
-                boxShadow: '0 8px 32px rgba(0,0,0,0.2)'
+    <AppContainer>
+      <MainContainer>
+        {/* Header */}
+        <Header>
+          <HeaderLeft>
+            <BrushIcon />
+            <GlowingText>
+              <ShinyText>Doodle Recognizer</ShinyText>
+            </GlowingText>
+          </HeaderLeft>
+          <div>
+            <HamburgerButton aria-label="Open menu" onClick={() => setMobileMenuOpen(true)}>☰</HamburgerButton>
+            <InfoButton onClick={() => setShowInfo(true)} />
+          </div>
+        </Header>
+        {mobileMenuOpen && (
+          <MobileMenuOverlay onClick={() => setMobileMenuOpen(false)}>
+            <MobileMenuContent onClick={(e) => e.stopPropagation()}>
+              <MobileMenuHeader>
+                <span>Controls</span>
+                <CloseButton onClick={() => setMobileMenuOpen(false)} />
+              </MobileMenuHeader>
+
+              <SectionTitle>Brush Size</SectionTitle>
+              <ButtonGroup style={{ marginTop: 8 }}>
+                <Button onClick={() => setStrokeWidth(Math.max(1, strokeWidth - 2))}>-</Button>
+                <div style={{ alignSelf: 'center', color: '#a5b4fc', minWidth: 56, textAlign: 'center' }}>{strokeWidth}px</div>
+                <Button onClick={() => setStrokeWidth(Math.min(100, strokeWidth + 2))}>+</Button>
+              </ButtonGroup>
+
+              <SectionTitle>Brush Color</SectionTitle>
+              <ColorPicker>
+                {['#000000','#ff0000','#00ff00','#0000ff','#ffffff','#ffa500','#800080','#00ffff'].map((c) => (
+                  <button
+                    key={c}
+                    onClick={() => setBrushColor(c)}
+                    style={{ width: 24, height: 24, borderRadius: 6, border: c === brushColor ? '2px solid #fff' : '1px solid #555', background: c, cursor: 'pointer' }}
+                    aria-label={`Set color ${c}`}
+                  />
+                ))}
+                <button
+                  onClick={() => setIsErasing(!isErasing)}
+                  style={{ marginLeft: 8, padding: '4px 8px', borderRadius: 6, border: '1px solid #555', background: isErasing ? 'rgba(255,255,255,0.2)' : 'transparent', color: '#fff' }}
+                >
+                  {isErasing ? 'Eraser On' : 'Eraser Off'}
+                </button>
+              </ColorPicker>
+
+              <SectionTitle>Downloads</SectionTitle>
+              <Button fullWidth onClick={downloadUserDrawing}>💾 Save Original</Button>
+              <Button fullWidth onClick={downloadProcessedImage}>📥 Save Processed</Button>
+              <Button fullWidth onClick={downloadAIDrawing} disabled={!aiImage}>⬇️ Download AI Image</Button>
+            </MobileMenuContent>
+          </MobileMenuOverlay>
+        )}
+        
+        {/* Main Content - Three Column Layout */}
+        <MainContent>
+          {/* Left Panel - Drawing Tools */}
+          <Panel>
+            <DarkPanel>
+              {/* Tools Section */}
+              <div style={{ 
+                background: 'rgba(99, 102, 241, 0.2)',
+                borderRadius: '12px',
+                padding: '12px',
+                marginBottom: '16px',
+                border: '1px solid rgba(99, 102, 241, 0.3)'
               }}>
-                <Typography sx={{ 
-                  fontWeight: 600, 
-                  fontSize: 15, 
-                  color: '#e2e8f0', 
-                  letterSpacing: 0.5,
-                  textShadow: '0 1px 2px rgba(0,0,0,0.3)'
-                }}>Palette</Typography>
-                <Box sx={{ display: 'flex', gap: 1.5 }}>
-                  {[
-                    { color: '#1a1a1a', name: 'Charcoal', shadow: 'rgba(26,26,26,0.4)' },
-                    { color: '#dc2626', name: 'Crimson', shadow: 'rgba(220,38,38,0.4)' },
-                    { color: '#2563eb', name: 'Sapphire', shadow: 'rgba(37,99,235,0.4)' },
-                    { color: '#059669', name: 'Emerald', shadow: 'rgba(5,150,105,0.4)' },
-                    { color: '#d97706', name: 'Amber', shadow: 'rgba(217,119,6,0.4)' },
-                    { color: '#7c3aed', name: 'Violet', shadow: 'rgba(124,58,237,0.4)' },
-                    { color: '#ea580c', name: 'Tangerine', shadow: 'rgba(234,88,12,0.4)' },
-                    { color: '#0891b2', name: 'Teal', shadow: 'rgba(8,145,178,0.4)' }
-                  ].map((colorOption) => (
-                    <Box
-                      key={colorOption.color}
-                      onClick={() => setBrushColor(colorOption.color)}
-                      sx={{
-                        width: 36,
-                        height: 36,
-                        borderRadius: '50%',
-                        background: `linear-gradient(135deg, ${colorOption.color} 0%, ${colorOption.color}dd 100%)`,
-                        border: brushColor === colorOption.color 
-                          ? '3px solid #ffffff' 
-                          : '2px solid rgba(255,255,255,0.2)',
-                        cursor: 'pointer',
-                        position: 'relative',
-                        transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
-                        boxShadow: brushColor === colorOption.color 
-                          ? `0 0 0 2px ${colorOption.color}44, 0 8px 25px ${colorOption.shadow}` 
-                          : `0 4px 15px ${colorOption.shadow}`,
-                        '&:hover': {
-                          transform: 'translateY(-2px) scale(1.1)',
-                          boxShadow: `0 0 0 2px ${colorOption.color}66, 0 12px 35px ${colorOption.shadow}`,
-                          border: '2px solid rgba(255,255,255,0.4)'
-                        },
-                        '&:active': {
-                          transform: 'translateY(0) scale(1.05)'
-                        },
-                        '&::before': {
-                          content: '""',
-                          position: 'absolute',
-                          top: '50%',
-                          left: '50%',
+                <h3 style={{ 
+                  color: '#e2e8f0',
+                  margin: '0 0 12px 0',
+                  fontWeight: '600',
+                  fontSize: '0.95rem',
+                  textTransform: 'uppercase',
+                  letterSpacing: '0.5px'
+                }}>
+                  Drawing Tools
+                </h3>
+                
+                <p style={{ 
+                  color: '#a5b4fc', 
+                  marginBottom: '12px', 
+                  fontSize: '0.85rem',
+                  fontWeight: '500',
+                  margin: '0 0 12px 0'
+                }}>
+                  Brush Size
+                </p>
+                <div style={{ 
+                  display: 'flex', 
+                  alignItems: 'center', 
+                  gap: '6px', 
+                  marginBottom: '16px',
+                  background: 'rgba(99, 102, 241, 0.2)',
+                  borderRadius: '8px',
+                  padding: '6px',
+                  border: '1px solid rgba(99, 102, 241, 0.2)'
+                }}>
+                  <Button
+                    onClick={() => setStrokeWidth(Math.max(1, strokeWidth - 2))}
+                    style={{ 
+                      minWidth: '30px', 
+                      padding: '0', 
+                      color: '#e2e8f0', 
+                      borderColor: 'rgba(99, 102, 241, 0.4)',
+                      minHeight: '30px',
+                      margin: 0
+                    }}
+                  >-</Button>
+                  <div style={{ 
+                    background: 'rgba(99, 102, 241, 0.15)',
+                    borderRadius: '4px',
+                    padding: '4px 12px'
+                  }}>
+                    <span style={{ 
+                      color: '#e2e8f0', 
+                      minWidth: '40px', 
+                      textAlign: 'center', 
+                      fontSize: '0.85rem',
+                      fontWeight: '600',
+                      display: 'inline-block'
+                    }}>
+                      {strokeWidth}px
+                    </span>
+                  </div>
+                  <Button
+                    onClick={() => setStrokeWidth(Math.min(100, strokeWidth + 2))}
+                    style={{ 
+                      minWidth: '30px', 
+                      padding: '0', 
+                      color: '#e2e8f0', 
+                      borderColor: 'rgba(99, 102, 241, 0.4)',
+                      minHeight: '30px',
+                      margin: 0
+                    }}
+                  >+</Button>
+                </div>
+
+                <Button
+                  fullWidth
+                  onClick={() => setIsErasing(!isErasing)}
+                  style={{ 
+                    marginBottom: '16px', 
+                    textTransform: 'none', 
+                    fontSize: '0.85rem', 
+                    padding: '8px',
+                    borderRadius: '8px',
+                    borderWidth: '1px',
+                    borderColor: isErasing ? 'rgba(239, 68, 68, 0.5)' : 'rgba(99, 102, 241, 0.4)',
+                    backgroundColor: isErasing 
+                      ? 'rgba(239, 68, 68, 0.1)' 
+                      : 'rgba(99, 102, 241, 0.1)',
+                    color: isErasing ? '#fecaca' : '#a5b4fc'
+                  }}
+                >
+                  {isErasing ? '🧹 Eraser' : '✏️ Pencil'}
+                </Button>
+
+                <div style={{ marginBottom: '16px' }}>
+                  <p style={{ 
+                    color: '#a5b4fc', 
+                    marginBottom: '12px', 
+                    fontSize: '0.85rem',
+                    fontWeight: '500',
+                    margin: '0 0 12px 0'
+                  }}>
+                    Color
+                  </p>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: '2px', marginTop: '4px' }}>
+                    {['#000000', '#dc2626', '#2563eb', '#10b981', '#f59e0b', '#8b5cf6'].map((color) => (
+                      <div
+                        key={color}
+                        onClick={() => setBrushColor(color)}
+                        style={{
                           width: '20px',
                           height: '20px',
                           borderRadius: '50%',
-                          background: 'rgba(255,255,255,0.2)',
-                          transform: 'translate(-50%, -50%)',
-                          opacity: brushColor === colorOption.color ? 1 : 0,
-                          transition: 'opacity 0.2s ease'
-                        }
-                      }}
-                      title={colorOption.name}
-                    />
-                  ))}
-                </Box>
-              </Box>
-              <Button
-                variant="outlined"
-                color="primary"
-                onClick={clearCanvas}
-                sx={{ fontWeight: 700 }}
-              >Clear
-              </Button>
-              <Button
-                variant="outlined"
-                color="secondary"
-                onClick={downloadUserDrawing}
-                sx={{ fontWeight: 700 }}
-              >
-                Download Drawing
-              </Button>
-              <Button
-                variant="contained"
-                color="primary"
-                onClick={downloadAIDrawing}
-                disabled={!aiImage}
-                sx={{ 
-                  fontWeight: 700,
-                  background: 'linear-gradient(45deg, #1976d2 0%, #2196f3 100%)',
-                  '&:hover': {
-                    background: 'linear-gradient(45deg, #1565c0 0%, #1e88e5 100%)',
-                    boxShadow: '0 4px 12px rgba(30, 136, 229, 0.3)'
-                  },
-                  '&.Mui-disabled': {
-                    background: '#e0e0e0',
-                    color: '#9e9e9e'
-                  },
-                  textTransform: 'none',
-                  fontSize: '0.9rem',
-                  px: 3,
-                  py: 1,
-                  borderRadius: 2,
-                  boxShadow: '0 2px 8px rgba(0,0,0,0.1)',
-                  transition: 'all 0.3s ease'
-                }}
-                startIcon={<DownloadIcon />}
-              >
-                {aiImage ? 'Download Cartoon' : 'Generating...'}
-              </Button>
-              {aiImage && (
-                <Box sx={{ 
-                  mt: 3, 
-                  textAlign: 'center',
-                  backgroundColor: 'background.paper',
-                  p: 2,
-                  borderRadius: 2,
-                  boxShadow: 1
-                }}>
-                  <Typography variant="h6" gutterBottom>
-                    AI Generated Doodle
-                  </Typography>
-                  <Box sx={{ 
-                    display: 'flex', 
-                    justifyContent: 'center',
-                    mb: 2,
-                    backgroundColor: 'background.default',
-                    p: 1,
-                    borderRadius: 1,
-                    boxShadow: '0 2px 8px rgba(0,0,0,0.1)'
-                  }}>
-                    <img 
-                      src={aiImage} 
-                      alt="AI Generated Doodle" 
-                      style={{ 
-                        maxWidth: '100%', 
-                        maxHeight: '280px', 
-                        objectFit: 'contain',
-                        borderRadius: '4px'
-                      }} 
-                    />
-                  </Box>
-                </Box>
-              )}
-              <Button
-                variant="outlined"
-                color="secondary"
-                onClick={downloadProcessedImage}
-                sx={{ fontWeight: 700 }}
-              >Download Processed
-              </Button>
-            </Box>
-          </Box>
-          
-          <canvas
-            ref={canvasRef}
-            width={canvasSize.width}
-            height={canvasSize.height}
-            style={{
-              border: '2.5px solid #6366f1',
-              borderRadius: 18,
-              background: '#fff',
-              boxShadow: '0 4px 18px 0 rgba(31, 38, 135, 0.08)',
-              touchAction: 'none',
-              maxWidth: '98vw',
-              maxHeight: '60vw',
-              cursor: 'crosshair',
-              marginBottom: 18
-            }}
-            onPointerDown={handlePointerDown}
-            onPointerMove={handlePointerMove}
-            onPointerUp={handlePointerUp}
-            onPointerLeave={handlePointerUp}
-          />
-          
-          <Box sx={{ display: 'flex', flexDirection: { xs: 'column', md: 'row' }, gap: 3, mt: 2, mb: 2, width: '100%', justifyContent: 'center', alignItems: 'stretch' }}>
-            <Paper elevation={3} sx={{ flex: 1, p: 2.5, background: 'rgba(36,41,60,0.97)', borderRadius: 10, border: '2px solid #f472b6', minWidth: 240, maxWidth: 420, textAlign: 'center', mb: { xs: 2, md: 0 } }}>
-              <Typography variant="subtitle1" sx={{ color: '#f472b6', fontWeight: 600, letterSpacing: 1, mb: 1 }}>
-              Model Prediction {prediction && `${(predictionConfidence * 100).toFixed(1)}% confidence`}
+                          backgroundColor: color,
+                          cursor: 'pointer',
+                          border: brushColor === color ? '2px solid white' : '2px solid transparent',
+                          transition: 'all 0.2s ease'
+                        }}
+                      />
+                    ))}
+                  </div>
+                </div>
+                
+                <Button
+                  fullWidth
+                  onClick={resetCanvasAndFeedback}
+                  style={{
+                    color: '#e2e8f0',
+                    borderColor: '#4b5563',
+                    backgroundColor: 'rgba(75, 85, 99, 0.1)',
+                    fontSize: '0.85rem',
+                    fontWeight: '500',
+                    textTransform: 'none',
+                    borderRadius: '8px'
+                  }}
+                >
+                  🗑️ Clear Canvas
+                </Button>
+              </div>
+            </DarkPanel>
 
-              </Typography>
-              <Typography variant="h5" sx={{ color: prediction ? '#f472b6' : '#64748b', fontWeight: 700, letterSpacing: 2, mb: 1 }}>
-                {prediction ? prediction.charAt(0).toUpperCase() + prediction.slice(1) : '—'}
-              </Typography>
+            {/* Actions Section */}
+            <div style={{ 
+              padding: '12px', 
+              borderRadius: '8px',
+              background: '#f8fafc',
+              boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
+              marginBottom: '16px'
+            }}>
+              <h3 style={{ 
+                marginBottom: '12px', 
+                fontWeight: '800', 
+                fontSize: '1.1rem',
+                background: 'linear-gradient(90deg, #4a00e0, #8e2de2, #4a00e0)',
+                backgroundSize: '200% auto',
+                backgroundClip: 'text',
+                WebkitBackgroundClip: 'text',
+                WebkitTextFillColor: 'transparent',
+                animation: `${shiny} 4s linear infinite`,
+                margin: '0 0 12px 0'
+              }}>
+                ACTIONS
+              </h3>
               
-              {topPredictions.length > 0 && (
-                <Box sx={{ mt: 2, textAlign: 'left' }}>
-                  <Typography variant="caption" sx={{ color: '#a5b4fc', display: 'block', mb: 1 }}>
-                    Top predictions:
-                  </Typography>
-                  {topPredictions.map((item, index) => (
-                    <Box key={index} sx={{ 
-                      display: 'flex', 
-                      justifyContent: 'space-between',
-                      alignItems: 'center',
-                      mb: 0.5,
-                      background: index === 0 ? 'rgba(244, 114, 182, 0.1)' : 'transparent',
-                      p: 0.5,
-                      borderRadius: 1
-                    }}>
-                      <Typography variant="body2" sx={{ color: '#e2e8f0' }}>
-                        {item.class.charAt(0).toUpperCase() + item.class.slice(1)}
-                      </Typography>
-                      <Box sx={{ 
-                        width: '60px',
-                        height: '8px',
-                        background: 'rgba(255,255,255,0.1)',
-                        borderRadius: '4px',
-                        overflow: 'hidden',
-                        ml: 1
-                      }}>
-                        <Box 
-                          sx={{
-                            height: '100%',
-                            width: `${(item.confidence * 100).toFixed(0)}%`,
-                            background: 'linear-gradient(90deg, #f472b6, #ec4899)',
-                            borderRadius: '4px',
-                            transition: 'width 0.5s ease-out'
-                          }}
-                        />
-                      </Box>
-                      <Typography variant="caption" sx={{ color: '#a5b4fc', ml: 1, minWidth: '40px', textAlign: 'right' }}>
-                        {(item.confidence * 100).toFixed(1)}%
-                      </Typography>
-                    </Box>
-                  ))}
-                </Box>
-              )}
-            </Paper>
-            <Paper elevation={3} sx={{ flex: 1, p: 2.5, background: 'rgba(36,41,60,0.97)', borderRadius: 10, border: '2px solid #06b6d4', minWidth: 240, maxWidth: 480, display: 'flex', flexDirection: 'column' }}>
-              <Typography variant="subtitle1" sx={{ color: '#a5b4fc', fontWeight: 600, letterSpacing: 1, mb: 1, textAlign: 'center' }}>
+              <Button
+                fullWidth
+                primary
+                onClick={handleEnhance}
+                disabled={isEnhancing}
+                style={{ textTransform: 'none', fontSize: '0.75rem' }}
+              >
+                {isEnhancing ? '⏳ Generating...' : '🎨 Generate AI Image'}
+              </Button>
+
+              <Button
+                fullWidth
+                onClick={downloadUserDrawing}
+                style={{ 
+                  textTransform: 'none', 
+                  fontSize: '0.92rem',
+                  fontWeight: '600',
+                  backgroundColor: 'rgba(49, 46, 129, 0.95)',
+                  color: '#ffffff',
+                  textShadow: '0 1px 1px rgba(0, 0, 0, 0.36)',
+                  border: '1px solid rgba(99, 102, 241, 0.8)',
+                  boxShadow: '0 2px 4px rgba(0,0,0,0.2)',
+                  marginBottom: '8px',
+                  transition: 'all 0.2s ease',
+                  '&:hover': {
+                    backgroundColor: 'rgba(37, 35, 96, 0.95)',
+                    transform: 'translateY(-1px)',
+                    boxShadow: '0 4px 8px rgba(0,0,0,0.25)'
+                  }
+                }}
+              >
+                💾 Save Drawing
+              </Button>
+
+              <Button
+                fullWidth
+                onClick={downloadProcessedImage}
+                style={{ 
+                  textTransform: 'none', 
+                  fontSize: '0.8rem',
+                  fontWeight: '600',
+                  backgroundColor: 'rgba(49, 46, 129, 0.95)',
+                  color: '#ffffff',
+                  textShadow: '0 1px 1px rgba(0,0,0,0.3)',
+                  border: '1px solid rgba(99, 102, 241, 0.8)',
+                  boxShadow: '0 2px 4px rgba(0,0,0,0.2)',
+                  transition: 'all 0.2s ease',
+                  '&:hover': {
+                    backgroundColor: 'rgba(37, 35, 96, 0.95)',
+                    transform: 'translateY(-1px)',
+                    boxShadow: '0 4px 8px rgba(0,0,0,0.25)'
+                  }
+                }}
+              >
+                📥 Save Processed
+              </Button>
+            </div>
+          </Panel>
+          
+          {/* Center Panel - Canvas */}
+          <CanvasContainer>
+            <CanvasWrapper>
+              <CanvasFrame>
+                <Canvas
+                  ref={canvasRef}
+                  width={canvasSize.width}
+                  height={canvasSize.height}
+                  onPointerDown={handlePointerDown}
+                  onPointerMove={handlePointerMove}
+                  onPointerUp={handlePointerUp}
+                  onPointerLeave={handlePointerUp}
+                  style={{
+                    width: `${canvasSize.width}px`,
+                    height: `${canvasSize.height}px`,
+                  }}
+                />
+              </CanvasFrame>
+              {/* Mobile quick actions placed right below the canvas */}
+              <MobileActionsBar>
+                <Button
+                  onClick={handlePredict}
+                  style={{ background: '#22c55e', color: '#fff', border: 'none' }}
+                >
+                  Analyze
+                </Button>
+                <Button
+                  onClick={handleEnhance}
+                  style={{ background: '#7c3aed', color: '#fff', border: 'none' }}
+                  disabled={isEnhancing}
+                >
+                  {isEnhancing ? 'Generating…' : 'Generate Art'}
+                </Button>
+                <Button
+                  onClick={clearCanvas}
+                  style={{ background: '#ef4444', color: '#fff', border: 'none' }}
+                >
+                  Clear
+                </Button>
+              </MobileActionsBar>
+              {/* Mobile-only prediction box below canvas */}
+              <MobileOnly>
+                <SectionTitle>Prediction</SectionTitle>
+                <MobilePredictionBox>
+                  {loading ? (
+                    <div>Analyzing your drawing...</div>
+                  ) : (
+                    <>
+                      <div style={{ marginBottom: 6 }}>
+                        <strong>Result:</strong>
+                        <div style={{ marginTop: 4 }}>
+                          {prediction ? (
+                            <>
+                              <div style={{ fontSize: 16, fontWeight: 700, color: '#a5b4fc' }}>{prediction}</div>
+                              <div style={{ opacity: 0.8 }}>Confidence: {Math.round((predictionConfidence || 0) * 100)}%</div>
+                            </>
+                          ) : (
+                            <div>No prediction yet</div>
+                          )}
+                        </div>
+                      </div>
+                      {topPredictions && topPredictions.length > 0 && (
+                        <div style={{ marginTop: 6 }}>
+                          <strong>Top guesses:</strong>
+                          <ul style={{ marginTop: 4, paddingLeft: 18 }}>
+                            {topPredictions.slice(0, 3).map((p, idx) => (
+                              <li key={idx}>
+                                {p.class} — {Math.round((p.confidence || 0) * 100)}%
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+                      {genAiPrediction && (
+                        <div style={{ marginTop: 8 }}>
+                          <strong>AI says:</strong>
+                          <div style={{ marginTop: 4, whiteSpace: 'pre-wrap' }}>{genAiPrediction}</div>
+                        </div>
+                      )}
+                    </>
+                  )}
+                </MobilePredictionBox>
+              </MobileOnly>
+
+              <ButtonGroup maxWidth={canvasSize.width + 'px'}>
+                <Button
+                  primary
+                  onClick={handlePredict}
+                  disabled={loading}
+                  fullWidth
+                  style={{ 
+                    padding: '12px',
+                    fontSize: '1rem',
+                    fontWeight: '600',
+                    textTransform: 'none',
+                    borderRadius: '8px'
+                  }}
+                >
+                  {loading ? 'Predicting...' : 'Predict Doodle'}
+                </Button>
+                <Button
+                  onClick={handleEnhance}
+                  disabled={isEnhancing}
+                  fullWidth
+                  style={{
+                    color: '#e2e8f0',
+                    borderColor: '#4b5563',
+                    padding: '12px',
+                    fontSize: '1rem',
+                    fontWeight: '500',
+                    textTransform: 'none',
+                    borderRadius: '8px'
+                  }}
+                >
+                  {isEnhancing ? 'Generating...' : 'Generate with AI'}
+                </Button>
+              </ButtonGroup>
+            </CanvasWrapper>
+          </CanvasContainer>
+          
+          {/* Right Panel - AI Analysis, Prediction Results & Actions */}
+          <Panel>
+            <div style={{ 
+              background: 'rgba(99, 102, 241, 0.2)',
+              borderRadius: '12px',
+              padding: '16px',
+              border: '1px solid rgba(99, 102, 241, 0.3)'
+            }}>
+              <h3 style={{ 
+                color: '#ffffff',
+                margin: '0 0 16px 0',
+                fontWeight: '600',
+                fontSize: '0.95rem',
+                textTransform: 'uppercase',
+                letterSpacing: '0.5px',
+                textAlign: 'center',
+                paddingBottom: '8px',
+                borderBottom: '1px solid rgba(99, 102, 241, 0.3)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: '8px'
+              }}>
                 AI Analysis
-              </Typography>
+              </h3>
               
               {genAiLoading ? (
-                <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', flex: 1, py: 2 }}>
-                  <CircularProgress size={24} sx={{ color: '#06b6d4', mb: 1 }} />
-                  <Typography variant="body2" sx={{ color: '#a5b4fc', textAlign: 'center' }}>
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '16px 0' }}>
+                  <LoadingSpinner />
+                  <p style={{ color: '#a5b4fc', textAlign: 'center', margin: 0 }}>
                     Analyzing your drawing...
-                  </Typography>
-                </Box>
+                  </p>
+                </div>
               ) : (
-                <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: '120px' }}>
-                  <Typography 
-                    variant="body1" 
-                    sx={{ 
-                      color: '#e2e8f0', 
-                      p: 2,
-                      background: 'rgba(6, 182, 212, 0.1)',
-                      borderRadius: 2,
-                      borderLeft: '3px solid #06b6d4',
-                      flex: 1,
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      textAlign: 'center'
-                    }}
-                  >
+                <div style={{ marginBottom: '16px' }}>
+                  <p style={{ 
+                    color: '#ffffff', 
+                    padding: '16px',
+                    background: 'rgba(6, 182, 212, 0.1)',
+                    borderRadius: '8px',
+                    borderLeft: '3px solid #06b6d4',
+                    minHeight: '80px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    textAlign: 'center',
+                    margin: 0
+                  }}>
                     {genAiPrediction || 'Draw something and click "Predict Doodle" to see AI analysis.'}
-                  </Typography>
-                </Box>
+                  </p>
+                </div>
               )}
-              
-              {aiImage && (
-                <Box sx={{ mt: 2, display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-                  <img src={aiImage} alt="AI Drawing" style={{ maxWidth: 180, borderRadius: 8, border: '1px solid #6366f1', background: '#fff', boxShadow: '0 2px 8px #23233644' }} />
-                  <Typography variant="caption" sx={{ color: '#a5b4fc', mt: 1 }}>
-                    AI generated drawing
-                  </Typography>
-                </Box>
-              )}
-            </Paper>
-          </Box>
-          
-          
-          <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', width: '100%', mt: 4 }}>
-            <Box sx={{ display: 'flex', gap: 2, alignItems: 'center', mt: 3, flexWrap: 'wrap', justifyContent: 'center' }}>
+                
               <Button
-                variant="contained"
-                color="primary"
-                onClick={handlePredictAndGenerate}
-                disabled={loading}
-                sx={{ fontWeight: 700, px: 4, py: 1.5, fontSize: 16 }}
-              >{loading ? <CircularProgress size={20} sx={{ color: '#fff' }} /> : 'Predict Doodle'}
+                fullWidth
+                primary
+                onClick={handleGenAiPredict}
+                disabled={genAiLoading}
+                style={{ marginBottom: '16px', textTransform: 'none' }}
+              >
+                {genAiLoading ? 'Analyzing...' : '🔍 Get AI Analysis'}
               </Button>
-            </Box>
-            {feedback && (
-              <Typography variant="h6" sx={{ mt: 2, color: '#06b6d4', fontWeight: 600 }}>
-                {feedback}
-              </Typography>
-            )}
-          </Box>
-        </Box>
-      </Box>
-      <Backdrop
-        open={showInfo}
-        onClick={() => setShowInfo(false)}
-        sx={{ 
-          zIndex: 9999,
-          backgroundColor: 'rgba(0, 0, 0, 0.8)',
-          backdropFilter: 'blur(8px)'
-        }}
-      >
-        <Fade in={showInfo} timeout={300}>
-          <Box
-            onClick={(e) => e.stopPropagation()}
-            sx={{
-              background: 'linear-gradient(135deg, #232336 0%, #1e1e2e 100%)',
-              color: '#f3f4f6',
-              p: 4,
-              borderRadius: 4,
-              width: { xs: '90%', sm: '80%', md: '600px' },
-              maxWidth: '90vw',
-              maxHeight: '80vh',
-              overflow: 'auto',
-              position: 'relative',
-              boxShadow: '0 20px 60px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(99, 102, 241, 0.3)',
-              border: '1px solid rgba(99, 102, 241, 0.2)',
-              '&::-webkit-scrollbar': {
-                width: '8px'
-              },
-              '&::-webkit-scrollbar-track': {
-                background: 'rgba(255,255,255,0.1)',
-                borderRadius: '4px'
-              },
-              '&::-webkit-scrollbar-thumb': {
-                background: 'rgba(99, 102, 241, 0.6)',
-                borderRadius: '4px',
-                '&:hover': {
-                  background: 'rgba(99, 102, 241, 0.8)'
-                }
-              }
-            }}
-          >
-            <IconButton
-              onClick={() => setShowInfo(false)}
-              sx={{
-                position: 'absolute',
-                top: 16,
-                right: 16,
-                color: '#a5b4fc',
-                background: 'rgba(255,255,255,0.1)',
-                '&:hover': {
-                  background: 'rgba(255,255,255,0.2)',
-                  transform: 'scale(1.1)'
-                },
-                transition: 'all 0.2s ease'
-              }}
-            >
-              <CloseIcon />
-            </IconButton>
-            
-            <Box sx={{ display: 'flex', alignItems: 'center', mb: 3 }}>
-              <InfoIcon sx={{ color: '#6366f1', fontSize: 32, mr: 2 }} />
-              <Typography 
-                variant="h4" 
-                sx={{ 
-                  color: '#6366f1', 
-                  fontFamily: 'Inter, sans-serif',
-                  fontWeight: 700,
-                  background: 'linear-gradient(135deg, #6366f1 0%, #a5b4fc 100%)',
-                  backgroundClip: 'text',
-                  WebkitBackgroundClip: 'text',
-                  WebkitTextFillColor: 'transparent'
-                }}
-              >
-                About Doodle Recognizer
-              </Typography>
-            </Box>
-            
-            <Typography 
-              variant="body1" 
-              sx={{ 
-                lineHeight: 1.7, 
-                mb: 3, 
-                fontSize: '1.1rem',
-                color: '#e2e8f0'
-              }}
-            >
-              This advanced doodle recognition app uses machine learning to identify your drawings and generate AI-powered artwork based on your sketches.
-            </Typography>
-            
-            <Box sx={{ mb: 3 }}>
-              <Typography 
-                variant="h6" 
-                sx={{ 
-                  color: '#f472b6', 
-                  mb: 2, 
-                  fontWeight: 600,
-                  display: 'flex',
-                  alignItems: 'center'
-                }}
-              >
-                ✨ Features
-              </Typography>
+            </div>
+
+            {/* Prediction Results Section */}
+            <div style={{ 
+              background: 'rgba(99, 102, 241, 0.2)',
+              borderRadius: '12px',
+              padding: '16px',
+              border: '1px solid rgba(99, 102, 241, 0.3)',
+              marginTop: '16px'
+            }}>
+              <h3 style={{ 
+                color: '#e2e8f0',
+                margin: '0 0 16px 0',
+                fontWeight: '600',
+                fontSize: '0.95rem',
+                textTransform: 'uppercase',
+                letterSpacing: '0.5px',
+                textAlign: 'center',
+                paddingBottom: '8px',
+                borderBottom: '1px solid rgba(99, 102, 241, 0.3)'
+              }}>
+                Prediction Results
+              </h3>
               
-              <Box component="ul" sx={{ pl: 0, listStyle: 'none' }}>
-                {[
-                  { icon: '🧠', text: 'Real-time drawing recognition using neural networks' },
-                  { icon: '🎨', text: 'AI-powered image generation based on your doodles' },
-                  { icon: '🖌', text: 'Customizable brush size and colors' },
-                  { icon: '💾', text: 'Download your drawings and AI-generated images' },
-                  { icon: '📱', text: 'Responsive canvas that adapts to your screen' }
-                ].map((feature, index) => (
-                  <Box 
-                    key={index}
-                    component="li" 
-                    sx={{ 
-                      display: 'flex', 
-                      alignItems: 'center', 
-                      mb: 1.5,
-                      p: 2,
-                      borderRadius: 2,
-                      background: 'rgba(255,255,255,0.05)',
-                      border: '1px solid rgba(255,255,255,0.1)',
-                      transition: 'all 0.2s ease',
-                      '&:hover': {
-                        background: 'rgba(255,255,255,0.1)',
-                        transform: 'translateX(8px)'
-                      }
-                    }}
-                  >
-                    <Typography sx={{ fontSize: '1.5rem', mr: 2 }}>
-                      {feature.icon}
-                    </Typography>
-                    <Typography sx={{ color: '#cbd5e1', lineHeight: 1.6 }}>
-                      {feature.text}
-                    </Typography>
-                  </Box>
-                ))}
-              </Box>
-            </Box>
-            
-            <Box 
-              sx={{ 
-                mt: 4, 
-                p: 3, 
-                borderRadius: 3,
-                background: 'linear-gradient(135deg, rgba(99, 102, 241, 0.1) 0%, rgba(244, 114, 182, 0.1) 100%)',
+              <div style={{ marginBottom: '16px' }}>
+                <p style={{ 
+                  color: '#e2e8f0', 
+                  padding: '16px',
+                  background: 'rgba(99, 102, 241, 0.1)',
+                  borderRadius: '8px',
+                  borderLeft: '3px solid #6366f1',
+                  minHeight: '60px',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  justifyContent: 'center',
+                  textAlign: 'center',
+                  margin: 0
+                }}>
+                  {prediction ? (
+                    <>
+                      <span style={{ 
+                        fontSize: '1.1rem', 
+                        fontWeight: '600',
+                        marginBottom: '8px'
+                      }}>
+                        {prediction.charAt(0).toUpperCase() + prediction.slice(1)}
+                      </span>
+                      <span style={{ 
+                        color: '#a5b4fc',
+                        fontSize: '0.9rem'
+                      }}>
+                        Confidence: {Math.round(predictionConfidence * 100)}%
+                      </span>
+                    </>
+                  ) : (
+                    'Draw something and click "Predict Doodle" to see predictions.'
+                  )}
+                </p>
+              </div>
+            </div>
+
+
+            {/* AI Generated Image Display */}
+            {aiImage && (
+              <div style={{ 
+                padding: '16px', 
+                borderRadius: '8px',
+                background: 'linear-gradient(145deg, #1e1e2e 0%, #1a1a2e 100%)',
+                boxShadow: '0 8px 32px rgba(0,0,0,0.3)',
                 border: '1px solid rgba(99, 102, 241, 0.2)',
-                textAlign: 'center'
-              }}
-            >
-              <Typography 
-                variant="body2" 
-                sx={{ 
-                  color: '#a5b4fc', 
-                  fontSize: '1rem',
-                  fontWeight: 500,
-                  lineHeight: 1.6
+                backdropFilter: 'blur(10px)',
+                marginTop: '12px'
+              }}>
+                <h3 style={{ color: 'white', marginBottom: '16px', fontWeight: 'bold', margin: '0 0 16px 0' }}>
+                  🎭 AI Generated
+                </h3>
+                <img 
+                  src={aiImage} 
+                  alt="AI Generated Doodle" 
+                  style={{ 
+                    width: '100%', 
+                    borderRadius: '8px',
+                    border: '1px solid rgba(255,255,255,0.1)',
+                    marginBottom: '12px'
+                  }} 
+                />
+                <Button
+                  fullWidth
+                  onClick={downloadAIDrawing}
+                  style={{ 
+                    textTransform: 'none',
+                    backgroundColor: colors.success,
+                    color: 'white',
+                    border: 'none'
+                  }}
+                >
+                  💾 Download AI Image
+                </Button>
+              </div>
+            )}
+          </Panel>
+        </MainContent>
+
+        
+
+        {/* Feedback Display */}
+        {feedback && (
+          <FeedbackBox>
+            <p style={{ margin: 0, fontSize: '0.875rem' }}>
+              {feedback}
+            </p>
+          </FeedbackBox>
+        )}
+      </MainContainer>
+
+      {/* Info Modal */}
+      <Modal open={showInfo} onClick={() => setShowInfo(false)}>
+        <ModalContent onClick={(e) => e.stopPropagation()}>
+          <CloseButton onClick={() => setShowInfo(false)} />
+          
+          <div style={{ display: 'flex', alignItems: 'center', marginBottom: '24px' }}>
+            <span style={{ color: colors.primary, fontSize: '32px', marginRight: '16px' }}>ℹ️</span>
+            <h2 style={{ 
+              color: colors.primary, 
+              fontFamily: 'Inter, sans-serif',
+              fontWeight: 700,
+              background: 'linear-gradient(135deg, #6366f1 0%, #a5b4fc 100%)',
+              backgroundClip: 'text',
+              WebkitBackgroundClip: 'text',
+              WebkitTextFillColor: 'transparent',
+              margin: 0
+            }}>
+              About Doodle Recognizer
+            </h2>
+          </div>
+          
+          <p style={{ 
+            lineHeight: 1.7, 
+            marginBottom: '24px', 
+            fontSize: '1.1rem',
+            color: '#e2e8f0',
+            margin: '0 0 24px 0'
+          }}>
+            This advanced doodle recognition app uses machine learning to identify your drawings and generate AI-powered artwork based on your sketches.
+          </p>
+          
+          <div style={{ marginBottom: '24px' }}>
+            <h3 style={{ 
+              color: '#f472b6', 
+              marginBottom: '16px', 
+              fontWeight: 600,
+              display: 'flex',
+              alignItems: 'center',
+              margin: '0 0 16px 0'
+            }}>
+              ✨ Features
+            </h3>
+            
+            <div style={{ paddingLeft: 0, listStyle: 'none', margin: 0 }}>
+              {[
+                { icon: '🧠', text: 'Real-time drawing recognition using neural networks' },
+                { icon: '🎨', text: 'AI-powered image generation based on your doodles' },
+                { icon: '🖌', text: 'Customizable brush size and colors' },
+                { icon: '💾', text: 'Download your drawings and AI-generated images' },
+                { icon: '📱', text: 'Responsive canvas that adapts to your screen' }
+              ].map((feature, index) => (
+                <div 
+                  key={index}
+                  style={{ 
+                    display: 'flex', 
+                    alignItems: 'center', 
+                    marginBottom: '12px',
+                    padding: '16px',
+                    borderRadius: '8px',
+                    background: 'rgba(255,255,255,0.05)',
+                    border: '1px solid rgba(255,255,255,0.1)',
+                    transition: 'all 0.2s ease'
+                  }}
+                >
+                  <span style={{ fontSize: '1.5rem', marginRight: '16px' }}>
+                    {feature.icon}
+                  </span>
+                  <span style={{ color: '#cbd5e1', lineHeight: 1.6 }}>
+                    {feature.text}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+          
+          <div style={{ 
+            marginTop: '32px', 
+            padding: '24px', 
+            borderRadius: '12px',
+            background: 'linear-gradient(135deg, rgba(99, 102, 241, 0.1) 0%, rgba(244, 114, 182, 0.1) 100%)',
+            border: '1px solid rgba(99, 102, 241, 0.2)',
+            textAlign: 'center'
+          }}>
+            <p style={{ 
+              color: '#a5b4fc', 
+              fontSize: '1rem',
+              fontWeight: 500,
+              lineHeight: 1.6,
+              margin: 0
+            }}>
+              Draw something on the canvas and click <strong>"Predict Doodle"</strong> to see the magic happen!
+            </p>
+          </div>
+        </ModalContent>
+      </Modal>
+      
+      <Footer>
+        <div>© {new Date().getFullYear()} Doodle Recognizer. All rights reserved.</div>
+        <div style={{ marginTop: '8px' }}>
+          <a href="#" onClick={(e) => { e.preventDefault(); setShowInfo(true); }}>About</a>
+          <a href="#" onClick={(e) => { e.preventDefault(); setActiveTab('privacy'); setShowTerms(true); }}>Privacy Policy</a>
+          <a href="#" onClick={(e) => { e.preventDefault(); setActiveTab('terms'); setShowTerms(true); }}>Terms of Use</a>
+          <a href="mailto:support@doodlerecognizer.com" onClick={(e) => e.stopPropagation()}>Contact</a>
+        </div>
+      </Footer>
+
+      {/* Terms and Privacy Modal */}
+      {showTerms && (
+        <Modal onClick={() => setShowTerms(false)}>
+          <ModalContent onClick={e => e.stopPropagation()} style={{ maxWidth: '800px', maxHeight: '80vh', overflowY: 'auto' }}>
+            <CloseButton onClick={() => setShowTerms(false)} />
+            
+            <div style={{ display: 'flex', marginBottom: '20px', borderBottom: '1px solid rgba(255,255,255,0.1)' }}>
+              <button 
+                onClick={() => setActiveTab('privacy')}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  color: activeTab === 'privacy' ? colors.primary : colors.textSecondary,
+                  padding: '12px 24px',
+                  fontSize: '16px',
+                  cursor: 'pointer',
+                  borderBottom: activeTab === 'privacy' ? `2px solid ${colors.primary}` : 'none',
+                  transition: 'all 0.3s ease'
                 }}
-              > <strong>"Predict & Generate AI"</strong> to see the magic happen!
-              </Typography>
-            </Box>
-          </Box>
-        </Fade>
-      </Backdrop>
-    </ThemeProvider>
+              >
+                Privacy Policy
+              </button>
+              <button 
+                onClick={() => setActiveTab('terms')}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  color: activeTab === 'terms' ? colors.primary : colors.textSecondary,
+                  padding: '12px 24px',
+                  fontSize: '16px',
+                  cursor: 'pointer',
+                  borderBottom: activeTab === 'terms' ? `2px solid ${colors.primary}` : 'none',
+                  transition: 'all 0.3s ease'
+                }}
+              >
+                Terms of Use
+              </button>
+            </div>
+
+            {activeTab === 'privacy' ? (
+              <div>
+                <h2 style={{ color: colors.primary, marginBottom: '20px' }}>Privacy Policy</h2>
+                <p style={{ color: colors.text, lineHeight: '1.6', marginBottom: '16px' }}>
+                  <strong>Last Updated:</strong> August 23, 2024
+                </p>
+                
+                <SectionTitle>1. Information We Collect</SectionTitle>
+                <p style={{ color: colors.text, lineHeight: '1.6', marginBottom: '16px' }}>
+                  We collect the following types of information when you use our service:
+                </p>
+                <ul style={{ color: colors.text, paddingLeft: '20px', marginBottom: '20px' }}>
+                  <li>Drawings and sketches you create on our platform</li>
+                  <li>Prediction results and AI-generated content</li>
+                  <li>Basic usage data and analytics</li>
+                </ul>
+
+                <SectionTitle>2. How We Use Your Information</SectionTitle>
+                <p style={{ color: colors.text, lineHeight: '1.6', marginBottom: '16px' }}>
+                  We use your information to:
+                </p>
+                <ul style={{ color: colors.text, paddingLeft: '20px', marginBottom: '20px' }}>
+                  <li>Provide and improve our doodle recognition service</li>
+                  <li>Train and enhance our AI models (anonymously and in aggregate)</li>
+                  <li>Analyze usage patterns to improve user experience</li>
+                  <li>Prevent fraud and ensure service security</li>
+                </ul>
+
+                <SectionTitle>3. Data Security</SectionTitle>
+                <p style={{ color: colors.text, lineHeight: '1.6', marginBottom: '16px' }}>
+                  We implement appropriate security measures to protect your data, including encryption and secure server infrastructure. However, no method of transmission over the Internet is 100% secure.
+                </p>
+              </div>
+            ) : (
+              <div>
+                <h2 style={{ color: colors.primary, marginBottom: '20px' }}>Terms of Use</h2>
+                <p style={{ color: colors.text, lineHeight: '1.6', marginBottom: '16px' }}>
+                  <strong>Effective Date:</strong> August 23, 2024
+                </p>
+
+                <SectionTitle>1. Acceptance of Terms</SectionTitle>
+                <p style={{ color: colors.text, lineHeight: '1.6', marginBottom: '16px' }}>
+                  By accessing or using the Doodle Recognizer service, you agree to be bound by these Terms of Use and our Privacy Policy.
+                </p>
+
+                <SectionTitle>2. Intellectual Property</SectionTitle>
+                <p style={{ color: colors.text, lineHeight: '1.6', marginBottom: '16px' }}>
+                  All content, features, and functionality of the service, including but not limited to text, graphics, logos, and software, are owned by Doodle Recognizer and are protected by copyright and other intellectual property laws.
+                </p>
+
+                <SectionTitle>3. User Content</SectionTitle>
+                <p style={{ color: colors.text, lineHeight: '1.6', marginBottom: '16px' }}>
+                  You retain ownership of any drawings or content you create using our service. By using the service, you grant us a non-exclusive, royalty-free, worldwide license to use, reproduce, modify, and display such content for the purpose of providing and improving our services.
+                </p>
+
+                <SectionTitle>4. Limitation of Liability</SectionTitle>
+                <p style={{ color: colors.text, lineHeight: '1.6', marginBottom: '16px' }}>
+                  Doodle Recognizer shall not be liable for any indirect, incidental, special, consequential, or punitive damages resulting from your use of or inability to use the service.
+                </p>
+
+                <SectionTitle>5. Changes to Terms</SectionTitle>
+                <p style={{ color: colors.text, lineHeight: '1.6', marginBottom: '16px' }}>
+                  We reserve the right to modify these terms at any time. We will provide notice of any changes by updating the "Last Updated" date at the top of these terms.
+                </p>
+              </div>
+            )}
+          </ModalContent>
+        </Modal>
+      )}
+    </AppContainer>
   );
 }
 
-export default App;
+export default App; 
