@@ -15,6 +15,7 @@
         "install": {
           "dependsOn": ["setup"],
           "cmds": [
+            "rm -f package-lock.json || true",
             "npm install --no-audit --no-fund --legacy-peer-deps"
           ]
         }
